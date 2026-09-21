@@ -414,3 +414,28 @@ async def explain_security_events_batch(
             detail=f"TreeSHAP batch explanation failed: {exc}",
         )
 
+
+@router.post(
+    "/explain/evidence",
+    summary="Generate grounded security explanation from an EvidencePack",
+    description="Synthesizes verified telemetry, ML anomaly scores, SHAP factors, and compliance results into a structured human-readable explanation.",
+    status_code=status.HTTP_200_OK,
+)
+async def explain_evidence_pack(
+    evidence: dict[str, Any],
+) -> dict[str, Any]:
+    from app.schemas.explanation import EvidencePack
+    from app.services.llm import GroundedExplanationService
+
+    try:
+        pack = EvidencePack.model_validate(evidence)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid EvidencePack: {exc}",
+        )
+
+    explanation = await GroundedExplanationService.generate_explanation(pack)
+    return explanation.model_dump()
+
+

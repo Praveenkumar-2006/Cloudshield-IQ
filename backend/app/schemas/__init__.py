@@ -35,6 +35,10 @@ from app.schemas.recommendations import (
     RemediationSimulationResult,
     RemediationStep,
 )
+from app.schemas.explanation import (
+    EvidencePack,
+    SecurityExplanation,
+)
 
 __all__ = [
     # Events
@@ -64,4 +68,8 @@ __all__ = [
     "RemediationSimulationRequest",
     "RemediationSimulationResult",
     "RecommendationStats",
+    # Explanations
+    "EvidencePack",
+    "SecurityExplanation",
 ]
+

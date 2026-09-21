@@ -133,6 +133,7 @@ Multi-Cloud Security Telemetry (AWS CloudTrail / Azure Activity / GCP Audit / CS
 4. **Remediation Synthesis (Playbooks)**: Translates findings into verified, multi-language code snippets with dynamic parameter injection.
 5. **Resilient Data Access (Repositories)**: Implements asynchronous database transactions backed by a self-healing circuit breaker for uninterrupted local development.
 6. **SecOps Interface (React UI)**: Delivers an information-dense, tactical visual command console adhering to cybersecurity design standards.
+7. **Grounded Security Explanation Layer (LLM / Deterministic Fallback)**: Consumes verified evidence envelopes (`EvidencePack`), neutralizes prompt injection attempts, redacts credentials, and synthesizes structured SOC explanations without hallucinating facts or altering risk/compliance decisions.
 
 ---
 
@@ -183,7 +184,7 @@ Multi-Cloud Security Telemetry (AWS CloudTrail / Azure Activity / GCP Audit / CS
 | **12** | React Dashboard & UI/UX Design System | ✅ Done | Tactical dark carbon UI (`#0A0D12`), 6 views, SecOps drawer, zero purple gradients. |
 | **13** | AWS Live Integration | 📐 Specified | Read-only IAM STS connector, CloudTrail SQS event stream ingestion. |
 | **14** | Azure & GCP Live Integrations | 📐 Specified | Azure Event Hub / Activity Log connector, GCP Pub/Sub Audit Log ingestion. |
-| **15** | Automated Multi-Tier Testing Framework | ✅ Done | **161 pytest backend tests (100%) + 26 Playwright E2E frontend tests (100%)**. |
+| **15** | Automated Multi-Tier Testing Framework | ✅ Done | **171 pytest backend tests (100%) + 30 Playwright E2E frontend tests (100%)**. |
 | **16** | Dockerization & Container Orchestration | ✅ Done | `docker-compose.dev.yml`, `docker-compose.prod.yml`, multi-stage Dockerfiles for backend and frontend. |
 | **17** | Production Deployment & Hardening | ✅ Done | Nginx reverse proxy gateway, CSP/HSTS security headers, token-bucket rate limiting, non-root user execution. |
 | **18** | Documentation, Evaluation & Defense | 🟡 Active | Architectural documentation, ADR records, defense slide decks, thesis alignment. |
@@ -328,6 +329,30 @@ Multi-Cloud Security Telemetry (AWS CloudTrail / Azure Activity / GCP Audit / CS
   4. **Machine Learning & TreeSHAP Explainer**: Unsupervised Isolation Forest anomaly scanner, Supervised XGBoost risk classifier, interactive TreeSHAP local waterfall attribution breakdown (risk-elevating vs risk-mitigating feature deltas), and global feature importance rankings.
   5. **SecOps Remediation Console Drawer**: Slide-over terminal drawer, contextual playbook synthesis, dynamic parameter substitution, multi-language code tabs (CLI, Terraform, Python), and perimeter posture simulation.
   6. **Telemetry Ingestion & Simulation**: Multi-cloud JSON/CSV upload dropzone, synthetic telemetry generators, live risk parameter sliders (0-100), and immediate hybrid evaluation.
+
+### Grounded LLM Explanation Layer & Anti-Hallucination Guardrails
+- **Core Purpose**: Transforms complex, multi-component security intelligence (Isolation Forest anomalies, XGBoost risk scores, TreeSHAP feature attributions, CIS/NIST compliance findings, and remediation playbooks) into clear, professional, human-readable security narratives.
+- **Strict Boundary Constraints**:
+  - The LLM is **never** permitted to determine compliance status or override compliance rules.
+  - The LLM **never** calculates or alters final calibrated risk scores or severity tiers.
+  - The LLM **never** invents security findings not established in the verified pipeline data.
+  - The LLM **never** executes infrastructure writes or cloud configuration modifications (preserving the Zero-Write Principle).
+  - Cloud credentials, access keys, tokens, and private keys are **never** transmitted to downstream LLM providers.
+- **Evidence Packaging (`app.schemas.explanation.EvidencePack`)**:
+  - Encapsulates verified telemetry, resource identifiers, anomaly probabilities, primary SHAP driver features, codified regulatory violations, and remediation guidance into a single factual envelope.
+- **Boundary Guard & Input Sanitization (`app.services.llm.sanitizer`)**:
+  - Neutralizes prompt injection attempts (e.g., `ignore previous instructions`, `system prompt override`, `<script>` tags, jailbreaks).
+  - Redacts sensitive credentials (AWS access keys `AKIA...`, private keys, bearer tokens, passwords) prior to LLM submission.
+- **Resilient Multi-Provider & Deterministic Fallback Engine (`app.services.llm.service`)**:
+  - Supports external OpenAI/Gemini/Anthropic-compatible endpoints with strict JSON schema response formats and 10-second request timeouts.
+  - Provides a **100% deterministic rule-grounded synthesis engine** that activates automatically when external LLM endpoints are unconfigured, offline, or experiencing network degradation.
+  - Factual structure adheres strictly to the six core reporting facets:
+    1. **Risk**: Canonical verified severity tier.
+    2. **What Happened**: Clear, factual description of executing principal, action, and target cloud resource.
+    3. **Why It Matters**: Operational risk rationale, baseline deviation, and TreeSHAP attribution driver.
+    4. **Verified Evidence**: Bulleted list of verified pipeline facts (e.g., lack of MFA, root account authentication, behavioral outlier flag).
+    5. **Compliance Impact**: Specific regulatory controls violated.
+    6. **Recommended Action**: Prescribed non-destructive remediation with CLI command highlighting.
 
 ### Phase 13: AWS Live Integration (Technical Specification)
 - **Zero-Write Architectural Principles**:

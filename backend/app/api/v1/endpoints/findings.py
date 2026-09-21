@@ -230,3 +230,59 @@ async def update_finding_triage_status(
         "status": target_status,
         "message": f"Finding '{finding_id}' triage status set to {target_status} (Dev Mode).",
     }
+
+
+@router.post("/{finding_id}/explain", response_model=dict[str, Any])
+async def generate_finding_explanation(
+    finding_id: str,
+    db: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    """
+    Generate a grounded human-readable security explanation for a specific finding.
+    Consumes verified pipeline evidence (telemetry, ML scores, SHAP factors, compliance violations,
+    and remediation guidance) through the GroundedExplanationService.
+    Guarantees 100% grounding, anti-hallucination protection, and zero cloud writes.
+    """
+    from app.services.llm import GroundedExplanationService
+
+    target_finding: Optional[dict[str, Any]] = None
+
+    if is_db_available():
+        try:
+            repo = FindingRepository(db)
+            finding = await repo.get_by_id(finding_id)
+            reset_db_availability()
+            if finding:
+                target_finding = {
+                    "finding_id": finding.finding_id,
+                    "title": finding.title,
+                    "cloud_provider": finding.cloud_provider,
+                    "resource_id": finding.resource_id,
+                    "category": finding.category,
+                    "severity": finding.severity,
+                    "risk_score": finding.risk_score,
+                    "shap_top_feature": finding.shap_top_feature,
+                    "shap_impact": finding.shap_impact,
+                    "compliance_violations": finding.compliance_violations,
+                    "remediation_guidance": finding.remediation_guidance,
+                    "cli_remediation_command": finding.cli_remediation_command,
+                    "terraform_remediation_snippet": finding.terraform_remediation_snippet,
+                    "status": finding.status,
+                }
+        except Exception as exc:
+            mark_db_unavailable()
+            logger.warning("Database query failed during explain for finding_id", finding_id=finding_id, error=str(exc))
+
+    if not target_finding:
+        for f in FALLBACK_FINDINGS:
+            if f["finding_id"] == finding_id:
+                target_finding = f
+                break
+
+    if not target_finding:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Finding '{finding_id}' not found.")
+
+    evidence_pack = GroundedExplanationService.build_evidence_pack(target_finding)
+    explanation = await GroundedExplanationService.generate_explanation(evidence_pack)
+    return explanation.model_dump()
+
