@@ -330,21 +330,70 @@ Multi-Cloud Security Telemetry (AWS CloudTrail / Azure Activity / GCP Audit / CS
   6. **Telemetry Ingestion & Simulation**: Multi-cloud JSON/CSV upload dropzone, synthetic telemetry generators, live risk parameter sliders (0-100), and immediate hybrid evaluation.
 
 ### Phase 13: AWS Live Integration (Technical Specification)
-- **Architecture**:
-  - Secure, read-only cross-account role assumption using AWS Security Token Service (STS) `AssumeRole` with external ID verification.
-  - Ingestion from Amazon CloudTrail via multi-region Amazon S3 bucket notifications routed through Amazon SQS FIFO queues.
-  - Periodic polling of AWS Config for resource inventory snapshots.
-- **Security Constraints**:
-  - Strict `SecurityAudit` and `ViewOnlyAccess` AWS managed IAM policies.
-  - Zero write or modify permissions granted to the CloudShield IQ ingestion role.
+- **Zero-Write Architectural Principles**:
+  - CloudShield IQ acts strictly as an unprivileged, read-only analytics consumer.
+  - Zero modification, deletion, or remediation writes are executed through ingestion credentials.
+- **AWS-Side Required Resources**:
+  1. **IAM Role (`CloudShieldIQ-AuditRole`)**:
+     - Configured with AWS Security Token Service (STS) `AssumeRole` trust relationship.
+     - Mandates an **External ID** parameter in trust policies to eliminate Confused Deputy vulnerabilities.
+  2. **IAM Managed Policies**:
+     - `arn:aws:iam::aws:policy/SecurityAudit`: Grants read-only access to security configurations, IAM policies, and cloud metadata.
+     - `arn:aws:iam::aws:policy/ViewOnlyAccess`: Allows resource listing across compute, storage, and networking layers.
+  3. **Amazon CloudTrail**:
+     - Multi-region trail logging all Management Events and high-risk Data Events (e.g., S3 bucket ACL changes, KMS key policies).
+  4. **Amazon S3 Storage Bucket**:
+     - Dedicated, encrypted (SSE-KMS or SSE-S3) audit archive bucket retaining `.json.gz` CloudTrail logs.
+  5. **Amazon S3 Event Notifications & Amazon SNS Topic**:
+     - S3 emits `s3:ObjectCreated:*` notifications to an SNS fanout topic upon log delivery.
+  6. **Amazon SQS (FIFO Queue - `cloudshield-telemetry.fifo`)**:
+     - Subscribed to SNS to buffer event batch notifications, guaranteeing strictly ordered delivery and preventing data loss during traffic spikes.
+  7. **AWS Config Service**:
+     - Continuous configuration recorders and delivery channels enabled to snapshot resource compliance state.
+- **CloudShield IQ Consumer Integration**:
+  - Asynchronous SQS listener polling S3 log manifests using `boto3`.
+  - Normalization via `TelemetryNormalizer.normalize_aws_cloudtrail()` mapping native CloudTrail structures into canonical `CloudSecurityEvent` models.
 
 ### Phase 14: Azure & GCP Live Integrations (Technical Specification)
-- **Azure Integration**:
-  - Microsoft Entra ID (Azure AD) App Registration with read-only `Reader` role assigned at subscription scope.
-  - Streaming ingestion of Azure Activity Logs and Microsoft Defender for Cloud alerts via Azure Event Hubs.
-- **GCP Integration**:
-  - Google Cloud Service Account with `roles/viewer` and `roles/logging.viewer`.
-  - Ingestion of Google Cloud Audit Logs routed through Google Cloud Pub/Sub topics.
+
+#### 1. Microsoft Azure Integration Resources
+- **Microsoft Entra ID (Azure AD) Service Principal**:
+  - Dedicated App Registration (`CloudShield-IQ-Collector`) utilizing certificate credentials or Federated Workload Identity (OIDC).
+- **Azure RBAC Role Assignments (Subscription / Management Group Scope)**:
+  - `Reader`: Enables query access to Azure Resource Manager (ARM) resource topologies and metadata.
+  - `Security Reader`: Authorizes ingestion of Microsoft Defender for Cloud security findings and recommendations.
+- **Azure Monitor Diagnostic Settings**:
+  - Configured at subscription and tenant level to stream Azure Activity Logs, Entra ID Sign-ins, and Audit Logs.
+- **Azure Event Hubs (`cloudshield-activity-stream`)**:
+  - High-throughput Kafka-compatible event streaming namespace with dedicated consumer group `cloudshield-iq-consumer`.
+- **Backend Consumer Engine**:
+  - Python `azure-identity` and `azure-eventhub` streaming consumer.
+  - Normalization via `TelemetryNormalizer.normalize_azure_activity_log()`.
+
+#### 2. Google Cloud Platform (GCP) Integration Resources
+- **Cloud IAM Service Account**:
+  - Dedicated service principal: `cloudshield-collector@<project-id>.iam.gserviceaccount.com`.
+  - Authenticated via Workload Identity Federation (recommended) or short-lived OAuth 2.0 access tokens.
+- **Cloud IAM Roles (Organization / Folder Scope)**:
+  - `roles/viewer`: Broad read-only visibility into GCP resource states.
+  - `roles/logging.viewer`: Permits querying and filtering cloud log entries.
+  - `roles/securitycenter.findingsViewer`: Ingests Google Cloud Security Command Center (SCC) findings.
+- **Cloud Logging Log Router Sink**:
+  - Organization-level Log Sink with extraction filter `logName:"logs/cloudaudit.googleapis.com"`.
+  - Exports Admin Activity, System Event, and Data Access audit records.
+- **Cloud Pub/Sub Messaging Pipeline**:
+  - Dedicated Pub/Sub topic (`cloudshield-audit-topic`) receiving Log Sink exports.
+  - Asynchronous pull subscription (`cloudshield-audit-pull-sub`) with 7-day message retention and dead-letter queue.
+- **Backend Consumer Engine**:
+  - Python `google-cloud-logging` and `google-cloud-pubsub` async subscriber client.
+  - Normalization via `TelemetryNormalizer.normalize_gcp_audit_log()`.
+
+#### Multi-Cloud Ingestion Architecture Matrix
+| Cloud Provider | Identity & Authentication | Primary Audit Telemetry | Decoupling Buffer Queue | Ingestion Normalizer |
+|---|---|---|---|---|
+| **AWS** | STS `AssumeRole` + External ID | CloudTrail (Management/Data) | S3 ObjectCreated $\to$ SNS $\to$ SQS FIFO | `normalize_aws_cloudtrail` |
+| **Azure** | Entra ID App Registration / OIDC | Azure Activity Log + Entra Logs | Diagnostic Settings $\to$ Event Hubs | `normalize_azure_activity_log` |
+| **GCP** | Service Account / Workload Identity | Google Cloud Audit Logs | Log Router Sink $\to$ Cloud Pub/Sub | `normalize_gcp_audit_log` |
 
 ### Phase 15: Automated Multi-Tier Testing Framework
 - **Backend Test Suite (Pytest - 161 Tests Passing)**:
@@ -384,9 +433,23 @@ Multi-Cloud Security Telemetry (AWS CloudTrail / Azure Activity / GCP Audit / CS
   - `stop.sh`: Clean container graceful shutdown.
 
 ### Phase 18: Documentation, Academic Evaluation & Defense Preparation
-- **Comprehensive Documentation**: Architectural specifications, API directories, mathematical formulations, and runbooks consolidated in `docs/documentation.md`.
-- **Architectural Decision Records (ADRs)**: Version-controlled design rationale in `docs/decisions/` (e.g., `ADR-001-ml-strategy.md`).
-- **Academic Defense Deliverables**: Slide deck presentations, benchmark comparison charts, and demonstration scripts for final defense evaluation.
+- **Comprehensive Technical Documentation**: Architectural specifications, API endpoint catalogs, database ERDs, mathematical scoring formulations, and operations runbooks consolidated in `docs/documentation.md`.
+- **Architectural Decision Records (ADRs)**:
+  - **`ADR-001: ML Strategy — Anomaly Detection vs. Risk Classification`**:
+    - *Problem Statement*: Selecting an optimal machine learning paradigm balancing zero-day threat detection, label scarcity, and mathematical explainability.
+    - *Options Evaluated*:
+      - *Option 1 (Unsupervised Anomaly Detection Only)*: Isolation Forest without labels. Strong for rare deviations, but lacks direct continuous risk semantics.
+      - *Option 2 (Supervised Risk Classification Only)*: XGBoost gradient boosted trees. Direct risk predictions, but vulnerable to dataset label misalignment.
+      - *Option 3 (Hybrid Architecture — Ratified & Implemented)*: Two-tier ML pipeline combining unsupervised anomaly scoring, dual-head supervised risk regression, and deterministic heuristic guardrails.
+    - *Decision Evolution*:
+      - *Provisional Phase (Phase 0)*: Option 1 was selected tentatively to uphold academic integrity while evaluating public intrusion datasets (KDD, UNSW-NB15).
+      - *Final Ratification (Post-Phase 2)*: Following rigorous profiling and generation of a calibrated multi-cloud control-plane dataset (8k/25k rows, fixed seed 42), **Option 3 was formally accepted and implemented**:
+        1. **Phase 5**: Unsupervised Isolation Forest (150 trees, ROC-AUC: 0.7723) detecting unlabelled statistical deviations.
+        2. **Phase 6**: Supervised dual-head XGBoost regressor & HistGradientBoosting multi-class classifier predicting continuous risk scores $[0.0, 100.0]$ and severity tiers.
+        3. **Phase 7**: Additive TreeSHAP explainer satisfying game-theoretic efficiency axioms across 5 security domains.
+        4. **Scoring Synergy**: Combined via composite formulation $R(e) = \min(100, 0.40 W_{\text{rule}} + 0.35 R_{\text{xgb}} + 0.25 (P_{\text{anomaly}} \times 100))$.
+- **Academic Defense Deliverables**:
+  - Slide deck presentations, benchmark comparison charts, and live interactive evaluation scripts prepared for final project defense.
 
 ---
 
