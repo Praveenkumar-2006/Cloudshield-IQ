@@ -1,0 +1,109 @@
+name: CloudShield IQ — CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  # ------------------------------------------------------------------ #
+  # Backend: Lint, Type Check, Unit Tests
+  # ------------------------------------------------------------------ #
+  backend-lint-test:
+    name: Backend — Lint & Test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: cloudshield_test
+          POSTGRES_USER: cloudshield
+          POSTGRES_PASSWORD: testpassword
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: pip install -e ".[dev]"
+
+      - name: Lint with ruff
+        working-directory: backend
+        run: ruff check .
+
+      - name: Type check with mypy
+        working-directory: backend
+        run: mypy app/
+
+      - name: Run tests
+        working-directory: backend
+        env:
+          APP_ENV: development
+          DEBUG: "false"
+          SECRET_KEY: ci-test-secret-key-minimum-32-characters-long
+          JWT_SECRET_KEY: ci-jwt-secret-key-minimum-32-characters-long
+          DATABASE_URL: postgresql+asyncpg://cloudshield:testpassword@localhost:5432/cloudshield_test
+        run: pytest --tb=short
+
+  # ------------------------------------------------------------------ #
+  # Frontend: Type Check and Build
+  # ------------------------------------------------------------------ #
+  frontend-build:
+    name: Frontend — Build Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Type check
+        working-directory: frontend
+        run: npm run type-check
+
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+
+  # ------------------------------------------------------------------ #
+  # Security: Secret scanning
+  # ------------------------------------------------------------------ #
+  secret-scan:
+    name: Secret Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan for secrets with gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

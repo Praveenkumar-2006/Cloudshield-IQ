@@ -1,0 +1,90 @@
+version: "3.9"
+
+# ============================================================
+# CloudShield IQ — Development Docker Compose
+# ============================================================
+# Usage:
+#   docker compose -f deployment/docker/docker-compose.dev.yml up
+#
+# Prerequisites:
+#   - backend/.env must exist (copy from backend/.env.example)
+#   - Never commit .env to Git
+# ============================================================
+
+services:
+
+  # ---------------------------------------------------------- #
+  # PostgreSQL Database
+  # ---------------------------------------------------------- #
+  postgres:
+    image: postgres:16-alpine
+    container_name: cloudshield_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: cloudshield_iq
+      POSTGRES_USER: cloudshield
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword_change_in_prod}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./../../database/seeds:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cloudshield -d cloudshield_iq"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ---------------------------------------------------------- #
+  # Backend API
+  # ---------------------------------------------------------- #
+  backend:
+    build:
+      context: ./../../backend
+      dockerfile: Dockerfile.dev
+    container_name: cloudshield_backend
+    restart: unless-stopped
+    env_file:
+      - ./../../backend/.env
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount source for hot-reload in development
+      - ./../../backend:/app
+      # Persistent upload storage
+      - uploads_data:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ---------------------------------------------------------- #
+  # Frontend (optional — can run with npm run dev instead)
+  # ---------------------------------------------------------- #
+  frontend:
+    build:
+      context: ./../../frontend
+      dockerfile: Dockerfile.dev
+    container_name: cloudshield_frontend
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./../../frontend:/app
+      - /app/node_modules
+    environment:
+      - VITE_API_URL=http://localhost:8000/api/v1
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+    driver: local
+  uploads_data:
+    driver: local

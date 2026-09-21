@@ -1,0 +1,20 @@
+FROM node:20-alpine
+
+LABEL maintainer="CloudShield IQ Project"
+LABEL description="CloudShield IQ Frontend — Development"
+
+WORKDIR /app
+
+# Copy package files for dependency caching
+COPY package.json package-lock.json ./
+
+# Install dependencies
+RUN npm ci
+
+# Copy remaining source code (overridden by volume mount in dev)
+COPY . .
+
+EXPOSE 5173
+
+# Run Vite dev server bound to 0.0.0.0 on port 5173
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173"]

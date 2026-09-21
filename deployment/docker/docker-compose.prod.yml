@@ -1,0 +1,158 @@
+# ============================================================
+# CloudShield IQ — Production Docker Compose
+# ============================================================
+# Multi-container hardened topology:
+# - PostgreSQL 16 Alpine database with health monitoring
+# - FastAPI backend (multi-stage Python 3.11-slim, non-root user)
+# - React SPA frontend (multi-stage Vite build + Nginx Alpine)
+# - Nginx Gateway reverse proxy with rate limiting & security headers
+# ============================================================
+
+services:
+
+  # ---------------------------------------------------------- #
+  # PostgreSQL Database Service
+  # ---------------------------------------------------------- #
+  postgres:
+    image: postgres:16-alpine
+    container_name: cloudshield_postgres_prod
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-cloudshield_iq}
+      POSTGRES_USER: ${POSTGRES_USER:-cloudshield}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_in_production_strict_key}
+    volumes:
+      - postgres_prod_data:/var/lib/postgresql/data
+      - ./../../database/seeds:/docker-entrypoint-initdb.d:ro
+    networks:
+      - internal_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cloudshield} -d ${POSTGRES_DB:-cloudshield_iq}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 1024M
+
+  # ---------------------------------------------------------- #
+  # FastAPI Backend API Service
+  # ---------------------------------------------------------- #
+  backend:
+    build:
+      context: ./../../backend
+      dockerfile: Dockerfile
+    container_name: cloudshield_backend_prod
+    restart: unless-stopped
+    environment:
+      APP_NAME: "CloudShield IQ"
+      APP_ENV: "production"
+      DEBUG: "false"
+      SECRET_KEY: ${SECRET_KEY:-cloudshield_production_secret_key_minimum_32_chars_long!}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cloudshield}:${POSTGRES_PASSWORD:-change_me_in_production_strict_key}@postgres:5432/${POSTGRES_DB:-cloudshield_iq}
+      DATABASE_POOL_SIZE: 20
+      DATABASE_MAX_OVERFLOW: 30
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-cloudshield_production_jwt_key_minimum_32_chars_long!}
+      CORS_ALLOWED_ORIGINS: '["http://localhost", "http://127.0.0.1"]'
+      UPLOAD_DIR: "/app/uploads"
+      MODEL_DIR: "/app/ml/models"
+      LOG_LEVEL: "INFO"
+      LOG_FORMAT: "json"
+    volumes:
+      - uploads_prod_data:/app/uploads
+      - models_prod_data:/app/ml/models
+    networks:
+      - internal_net
+      - frontend_net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2048M
+
+  # ---------------------------------------------------------- #
+  # React SPA Static Frontend Service
+  # ---------------------------------------------------------- #
+  frontend:
+    build:
+      context: ./../../frontend
+      dockerfile: Dockerfile
+    container_name: cloudshield_frontend_prod
+    restart: unless-stopped
+    networks:
+      - frontend_net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:80/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+
+  # ---------------------------------------------------------- #
+  # Nginx Gateway Reverse Proxy
+  # ---------------------------------------------------------- #
+  gateway:
+    image: nginx:1.27-alpine
+    container_name: cloudshield_gateway_prod
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./../nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./../nginx/conf.d:/etc/nginx/conf.d:ro
+    networks:
+      - frontend_net
+    depends_on:
+      - backend
+      - frontend
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/nginx-health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
+# ------------------------------------------------------------ #
+# Isolated Network Topology
+# ------------------------------------------------------------ #
+networks:
+  # Internal network: database isolated from the gateway
+  internal_net:
+    driver: bridge
+    internal: true
+  # Frontend network: gateway, backend, and static frontend
+  frontend_net:
+    driver: bridge
+
+# ------------------------------------------------------------ #
+# Persistent Volumes
+# ------------------------------------------------------------ #
+volumes:
+  postgres_prod_data:
+    driver: local
+  uploads_prod_data:
+    driver: local
+  models_prod_data:
+    driver: local

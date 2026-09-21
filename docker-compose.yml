@@ -1,0 +1,10 @@
+# ============================================================
+# CloudShield IQ — Root Docker Compose Launcher
+# ============================================================
+# Defaults to the development configuration.
+# For production deployment run:
+#   docker compose -f deployment/docker/docker-compose.prod.yml up -d
+# ============================================================
+
+include:
+  - path: deployment/docker/docker-compose.dev.yml

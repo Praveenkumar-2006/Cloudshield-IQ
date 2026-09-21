@@ -1,0 +1,119 @@
+# ============================================================
+# CloudShield IQ — .gitignore
+# ============================================================
+
+# ----- SECRETS — NEVER COMMIT -----
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+secrets/
+credentials/
+**/service-account*.json
+**/aws-credentials*
+**/azure-credentials*
+**/gcp-credentials*
+
+# ----- Python -----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.venv/
+venv/
+ENV/
+env/
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# ----- Node / React -----
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.npm
+dist/
+build/
+.cache/
+*.local
+
+# ----- ML Artifacts — store via DVC or model registry, not Git -----
+ml/models/*.pkl
+ml/models/*.joblib
+ml/models/*.h5
+ml/models/*.pt
+ml/models/*.onnx
+datasets/raw/
+datasets/processed/
+!datasets/raw/.gitkeep
+!datasets/processed/.gitkeep
+!datasets/synthetic/.gitkeep
+
+# ----- Docker -----
+.docker/
+
+# ----- Database -----
+*.sqlite3
+*.db
+pgdata/
+
+# ----- IDE -----
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ----- Logs -----
+logs/
+*.log
+
+# ----- Jupyter -----
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ----- OS -----
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+
+# ----- Test Artifacts & Uploads -----
+playwright-report/
+test-results/
+uploads/
+*.egg-info/
+

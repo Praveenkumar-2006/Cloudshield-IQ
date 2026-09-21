@@ -1,0 +1,660 @@
+{
+  "dataset_name": "cloud_security_events",
+  "profiled_at": "2026-09-02T19:08:03Z",
+  "shape": {
+    "rows": 25000,
+    "columns": 15
+  },
+  "memory_mb": 16.639,
+  "null_summary": {
+    "total_nulls": 10070,
+    "null_pct": 2.69
+  },
+  "duplicate_rows": 0,
+  "columns": {
+    "event_id": {
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 25000,
+      "kind": "categorical",
+      "categorical_stats": {
+        "top_values": {
+          "evt-0000000": {
+            "count": 1,
+            "pct": 0.0
+          },
+          "evt-0000001": {
+            "count": 1,
+            "pct": 0.0
+          },
+          "evt-0000002": {
+            "count": 1,
+            "pct": 0.0
+          },
+          "evt-0000003": {
+            "count": 1,
+            "pct": 0.0
+          },
+          "evt-0000004": {
+            "count": 1,
+            "pct": 0.0
+          },
+          "evt-0000005": {
+            "count": 1,
+            "pct": 0.0
+          },
+          "evt-0000006": {
+            "count": 1,
+            "pct": 0.0
+          },
+          "evt-0000007": {
+            "count": 1,
+            "pct": 0.0
+          },
+          "evt-0000008": {
+            "count": 1,
+            "pct": 0.0
+          },
+          "evt-0000009": {
+            "count": 1,
+            "pct": 0.0
+          },
+          "evt-0000010": {
+            "count": 1,
+            "pct": 0.0
+          },
+          "evt-0000011": {
+            "count": 1,
+            "pct": 0.0
+          },
+          "evt-0000012": {
+            "count": 1,
+            "pct": 0.0
+          },
+          "evt-0000013": {
+            "count": 1,
+            "pct": 0.0
+          },
+          "evt-0000014": {
+            "count": 1,
+            "pct": 0.0
+          }
+        }
+      }
+    },
+    "timestamp": {
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 24949,
+      "kind": "timestamp",
+      "timestamp_stats": {
+        "parseable": true,
+        "min": "2025-04-02 00:00:22+00:00",
+        "max": "2025-06-30 23:57:42+00:00",
+        "range_days": 89,
+        "null_count": 0
+      }
+    },
+    "cloud_provider": {
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 3,
+      "kind": "categorical",
+      "categorical_stats": {
+        "top_values": {
+          "aws": {
+            "count": 13726,
+            "pct": 54.9
+          },
+          "azure": {
+            "count": 7502,
+            "pct": 30.01
+          },
+          "gcp": {
+            "count": 3772,
+            "pct": 15.09
+          }
+        }
+      }
+    },
+    "resource_type": {
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 23,
+      "kind": "categorical",
+      "categorical_stats": {
+        "top_values": {
+          "rds:Instance": {
+            "count": 1413,
+            "pct": 5.65
+          },
+          "elb:LoadBalancer": {
+            "count": 1403,
+            "pct": 5.61
+          },
+          "s3:Bucket": {
+            "count": 1396,
+            "pct": 5.58
+          },
+          "cloudtrail:Trail": {
+            "count": 1390,
+            "pct": 5.56
+          },
+          "kms:Key": {
+            "count": 1385,
+            "pct": 5.54
+          },
+          "lambda:Function": {
+            "count": 1378,
+            "pct": 5.51
+          },
+          "iam:Role": {
+            "count": 1361,
+            "pct": 5.44
+          },
+          "ec2:Instance": {
+            "count": 1351,
+            "pct": 5.4
+          },
+          "iam:User": {
+            "count": 1330,
+            "pct": 5.32
+          },
+          "vpc:SecurityGroup": {
+            "count": 1319,
+            "pct": 5.28
+          },
+          "Microsoft.Sql/servers": {
+            "count": 1100,
+            "pct": 4.4
+          },
+          "Microsoft.Web/sites": {
+            "count": 1092,
+            "pct": 4.37
+          },
+          "Microsoft.KeyVault/vaults": {
+            "count": 1076,
+            "pct": 4.3
+          },
+          "Microsoft.Authorization/roleAssignments": {
+            "count": 1075,
+            "pct": 4.3
+          },
+          "Microsoft.Compute/virtualMachines": {
+            "count": 1072,
+            "pct": 4.29
+          }
+        }
+      }
+    },
+    "action": {
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 43,
+      "kind": "categorical",
+      "categorical_stats": {
+        "top_values": {
+          "DescribeInstances": {
+            "count": 2424,
+            "pct": 9.7
+          },
+          "RunInstances": {
+            "count": 1372,
+            "pct": 5.49
+          },
+          "AttachRolePolicy": {
+            "count": 1159,
+            "pct": 4.64
+          },
+          "CreateBucket": {
+            "count": 1121,
+            "pct": 4.48
+          },
+          "Microsoft.Compute/virtualMachines/write": {
+            "count": 1106,
+            "pct": 4.42
+          },
+          "CreateRole": {
+            "count": 946,
+            "pct": 3.78
+          },
+          "CreateUser": {
+            "count": 941,
+            "pct": 3.76
+          },
+          "Microsoft.Storage/storageAccounts/write": {
+            "count": 935,
+            "pct": 3.74
+          },
+          "PutBucketPublicAccessBlock": {
+            "count": 813,
+            "pct": 3.25
+          },
+          "AuthorizeSecurityGroupIngress": {
+            "count": 758,
+            "pct": 3.03
+          },
+          "Microsoft.Network/networkSecurityGroups/write": {
+            "count": 717,
+            "pct": 2.87
+          },
+          "Microsoft.KeyVault/vaults/secrets/read": {
+            "count": 694,
+            "pct": 2.78
+          },
+          "TerminateInstances": {
+            "count": 682,
+            "pct": 2.73
+          },
+          "Microsoft.Authorization/roleAssignments/write": {
+            "count": 641,
+            "pct": 2.56
+          },
+          "PutPublicAccessBlock": {
+            "count": 607,
+            "pct": 2.43
+          }
+        }
+      }
+    },
+    "actor_type": {
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 5,
+      "kind": "categorical",
+      "categorical_stats": {
+        "top_values": {
+          "user": {
+            "count": 11231,
+            "pct": 44.92
+          },
+          "service_account": {
+            "count": 7564,
+            "pct": 30.26
+          },
+          "assumed_role": {
+            "count": 3699,
+            "pct": 14.8
+          },
+          "api_key": {
+            "count": 1738,
+            "pct": 6.95
+          },
+          "root": {
+            "count": 768,
+            "pct": 3.07
+          }
+        }
+      }
+    },
+    "actor_name": {
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 198,
+      "kind": "categorical",
+      "categorical_stats": {
+        "top_values": {
+          "root": {
+            "count": 768,
+            "pct": 3.07
+          },
+          "svc-account-020": {
+            "count": 292,
+            "pct": 1.17
+          },
+          "svc-account-007": {
+            "count": 279,
+            "pct": 1.12
+          },
+          "svc-account-029": {
+            "count": 277,
+            "pct": 1.11
+          },
+          "svc-account-014": {
+            "count": 277,
+            "pct": 1.11
+          },
+          "svc-account-004": {
+            "count": 275,
+            "pct": 1.1
+          },
+          "svc-account-015": {
+            "count": 273,
+            "pct": 1.09
+          },
+          "svc-account-026": {
+            "count": 270,
+            "pct": 1.08
+          },
+          "svc-account-013": {
+            "count": 269,
+            "pct": 1.08
+          },
+          "svc-account-002": {
+            "count": 269,
+            "pct": 1.08
+          },
+          "svc-account-023": {
+            "count": 267,
+            "pct": 1.07
+          },
+          "svc-account-021": {
+            "count": 266,
+            "pct": 1.06
+          },
+          "svc-account-011": {
+            "count": 266,
+            "pct": 1.06
+          },
+          "svc-account-003": {
+            "count": 266,
+            "pct": 1.06
+          },
+          "svc-account-006": {
+            "count": 262,
+            "pct": 1.05
+          }
+        }
+      }
+    },
+    "source_ip": {
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 24238,
+      "kind": "categorical",
+      "categorical_stats": {
+        "top_values": {
+          "172.17.38.109": {
+            "count": 3,
+            "pct": 0.01
+          },
+          "10.1.220.58": {
+            "count": 3,
+            "pct": 0.01
+          },
+          "10.1.203.131": {
+            "count": 3,
+            "pct": 0.01
+          },
+          "10.0.254.225": {
+            "count": 3,
+            "pct": 0.01
+          },
+          "172.17.174.15": {
+            "count": 3,
+            "pct": 0.01
+          },
+          "10.0.178.109": {
+            "count": 3,
+            "pct": 0.01
+          },
+          "192.168.0.33.80": {
+            "count": 3,
+            "pct": 0.01
+          },
+          "172.17.208.254": {
+            "count": 3,
+            "pct": 0.01
+          },
+          "10.0.171.52": {
+            "count": 3,
+            "pct": 0.01
+          },
+          "192.168.0.114.181": {
+            "count": 3,
+            "pct": 0.01
+          },
+          "192.168.1.224.151": {
+            "count": 3,
+            "pct": 0.01
+          },
+          "10.1.78.23": {
+            "count": 3,
+            "pct": 0.01
+          },
+          "10.1.98.135": {
+            "count": 3,
+            "pct": 0.01
+          },
+          "172.16.59.24": {
+            "count": 3,
+            "pct": 0.01
+          },
+          "10.0.106.115": {
+            "count": 3,
+            "pct": 0.01
+          }
+        }
+      }
+    },
+    "region": {
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 16,
+      "kind": "categorical",
+      "categorical_stats": {
+        "top_values": {
+          "eu-west-1": {
+            "count": 2314,
+            "pct": 9.26
+          },
+          "eu-central-1": {
+            "count": 2313,
+            "pct": 9.25
+          },
+          "ap-southeast-1": {
+            "count": 2312,
+            "pct": 9.25
+          },
+          "us-east-1": {
+            "count": 2268,
+            "pct": 9.07
+          },
+          "us-east-2": {
+            "count": 2265,
+            "pct": 9.06
+          },
+          "us-west-2": {
+            "count": 2254,
+            "pct": 9.02
+          },
+          "westus2": {
+            "count": 1537,
+            "pct": 6.15
+          },
+          "southeastasia": {
+            "count": 1525,
+            "pct": 6.1
+          },
+          "westeurope": {
+            "count": 1512,
+            "pct": 6.05
+          },
+          "eastus": {
+            "count": 1495,
+            "pct": 5.98
+          },
+          "northeurope": {
+            "count": 1433,
+            "pct": 5.73
+          },
+          "europe-west1": {
+            "count": 784,
+            "pct": 3.14
+          },
+          "us-central1": {
+            "count": 779,
+            "pct": 3.12
+          },
+          "us-east1": {
+            "count": 747,
+            "pct": 2.99
+          },
+          "australia-southeast1": {
+            "count": 740,
+            "pct": 2.96
+          }
+        }
+      }
+    },
+    "mfa_used": {
+      "dtype": "bool",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 2,
+      "kind": "numeric",
+      "numeric_stats": {
+        "min": NaN,
+        "max": NaN,
+        "mean": NaN,
+        "median": NaN,
+        "std": NaN,
+        "p25": NaN,
+        "p75": NaN
+      },
+      "categorical_stats": {
+        "top_values": {
+          "True": {
+            "count": 16898,
+            "pct": 67.59
+          },
+          "False": {
+            "count": 8102,
+            "pct": 32.41
+          }
+        }
+      }
+    },
+    "outcome": {
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 3,
+      "kind": "categorical",
+      "categorical_stats": {
+        "top_values": {
+          "Success": {
+            "count": 20006,
+            "pct": 80.02
+          },
+          "Failure": {
+            "count": 3002,
+            "pct": 12.01
+          },
+          "Denied": {
+            "count": 1992,
+            "pct": 7.97
+          }
+        }
+      }
+    },
+    "severity": {
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 4,
+      "kind": "categorical",
+      "categorical_stats": {
+        "top_values": {
+          "low": {
+            "count": 13057,
+            "pct": 52.23
+          },
+          "medium": {
+            "count": 7445,
+            "pct": 29.78
+          },
+          "high": {
+            "count": 3406,
+            "pct": 13.62
+          },
+          "critical": {
+            "count": 1092,
+            "pct": 4.37
+          }
+        }
+      }
+    },
+    "risk_score": {
+      "dtype": "float64",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 6422,
+      "kind": "numeric",
+      "numeric_stats": {
+        "min": 0.0,
+        "max": 100.0,
+        "mean": 31.7601,
+        "median": 27.055,
+        "std": 20.0621,
+        "p25": 17.5575,
+        "p75": 39.88
+      }
+    },
+    "session_duration_s": {
+      "dtype": "float64",
+      "null_count": 10070,
+      "null_pct": 40.28,
+      "unique_count": 11622,
+      "kind": "numeric",
+      "numeric_stats": {
+        "min": 60.0,
+        "max": 28798.0,
+        "mean": 14364.0873,
+        "median": 14387.5,
+        "std": 8242.0881,
+        "p25": 7163.25,
+        "p75": 21396.0
+      }
+    },
+    "anomaly_label": {
+      "dtype": "int64",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 2,
+      "kind": "numeric",
+      "numeric_stats": {
+        "min": 0.0,
+        "max": 1.0,
+        "mean": 0.05,
+        "median": 0.0,
+        "std": 0.2179,
+        "p25": 0.0,
+        "p75": 0.0
+      },
+      "categorical_stats": {
+        "top_values": {
+          "0": {
+            "count": 23750,
+            "pct": 95.0
+          },
+          "1": {
+            "count": 1250,
+            "pct": 5.0
+          }
+        }
+      }
+    }
+  },
+  "class_balance": {
+    "anomaly_label": {
+      "0": {
+        "count": 23750,
+        "pct": 95.0
+      },
+      "1": {
+        "count": 1250,
+        "pct": 5.0
+      }
+    }
+  }
+}
