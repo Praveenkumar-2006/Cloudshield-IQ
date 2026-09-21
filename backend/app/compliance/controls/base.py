@@ -64,6 +64,7 @@ class BaseComplianceControl(ABC):
         """
         Helper method to construct a standard ComplianceControlResult.
         """
+        sanitized_ids = [str(r) for r in failed_resource_ids if r is not None and str(r).strip()] if failed_resource_ids else []
         return ComplianceControlResult(
             result_id=str(uuid.uuid4()),
             control_id=self.control_id,
@@ -74,6 +75,6 @@ class BaseComplianceControl(ABC):
             severity=self.severity,
             evaluated_resources=evaluated_resources,
             failed_resources=failed_resources,
-            failed_resource_ids=failed_resource_ids or [],
+            failed_resource_ids=sanitized_ids,
             evaluated_at=datetime.now(timezone.utc),
         )

@@ -19,6 +19,7 @@ from app.schemas.compliance import (
     ComplianceSummary,
 )
 from app.schemas.events import CloudSecurityEvent, CloudSecurityEventCreate
+from app.services.ingestion import get_ingestion_store
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -149,7 +150,8 @@ async def get_compliance_summary(
     Compute and retrieve the current compliance posture score across all registered frameworks.
     """
     engine = get_compliance_engine()
-    results = engine.evaluate(events=[], framework=framework)
+    store = get_ingestion_store()
+    results = engine.evaluate(events=store.events, framework=framework)
     return engine.calculate_summary(results)
 
 
@@ -166,5 +168,6 @@ async def generate_audit_report(
     Generate an enterprise compliance audit report containing full control breakdowns.
     """
     engine = get_compliance_engine()
-    results = engine.evaluate(events=[], framework=framework)
+    store = get_ingestion_store()
+    results = engine.evaluate(events=store.events, framework=framework)
     return engine.export_audit_report(results)

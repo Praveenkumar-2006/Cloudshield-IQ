@@ -19,6 +19,8 @@ from app.core.database import (
 )
 from app.core.logging import get_logger
 from app.repositories.events import EventRepository
+from app.repositories.findings import FindingRepository
+from app.schemas.assessments import SecurityFinding
 from app.schemas.events import CloudSecurityEvent
 from app.services.ingestion import (
     IngestionPipeline,
@@ -33,19 +35,30 @@ pipeline = IngestionPipeline()
 store = get_ingestion_store()
 
 
-async def _persist_events_safely(events: list[CloudSecurityEvent]) -> None:
-    """Asynchronously persist events to EventRepository when database is online."""
-    if not events or not is_db_available():
+async def _persist_ingestion_safely(
+    events: list[CloudSecurityEvent],
+    findings: Optional[list[SecurityFinding]] = None,
+) -> None:
+    """Asynchronously persist events to EventRepository and findings to FindingRepository when database is online."""
+    if not is_db_available():
         return
     try:
         async with async_session_factory() as session:
-            repo = EventRepository(session)
-            await repo.create_batch_from_schemas(events)
+            if events:
+                event_repo = EventRepository(session)
+                await event_repo.create_batch_from_schemas(events)
+            if findings:
+                finding_repo = FindingRepository(session)
+                await finding_repo.create_batch_from_schemas(findings)
             await session.commit()
             reset_db_availability()
     except Exception as exc:
         mark_db_unavailable()
-        logger.debug("Database event persistence skipped (offline mode)", error=str(exc))
+        logger.debug("Database event & finding persistence skipped (offline mode)", error=str(exc))
+
+
+async def _persist_events_safely(events: list[CloudSecurityEvent]) -> None:
+    await _persist_ingestion_safely(events, None)
 
 
 @router.post(
@@ -88,8 +101,11 @@ async def upload_telemetry_file(
         events_count=result.successful_events,
         anomalies=result.risk_summary["anomalies_detected"],
     )
-    if result.successful_events > 0 and store.events:
-        background_tasks.add_task(_persist_events_safely, store.events[-result.successful_events:])
+    if result.successful_events > 0:
+        recent_events = store.events[-result.successful_events:] if store.events else []
+        f_count = result.risk_summary.get("findings_count", 0)
+        recent_findings = store.findings[-f_count:] if f_count > 0 and store.findings else []
+        background_tasks.add_task(_persist_ingestion_safely, recent_events, recent_findings)
     return result
 
 
@@ -110,8 +126,11 @@ async def ingest_event_batch(
             detail="Payload must contain at least one event record.",
         )
     result = pipeline.process_raw_records(records, filename="api_batch")
-    if result.successful_events > 0 and store.events:
-        background_tasks.add_task(_persist_events_safely, store.events[-result.successful_events:])
+    if result.successful_events > 0:
+        recent_events = store.events[-result.successful_events:] if store.events else []
+        f_count = result.risk_summary.get("findings_count", 0)
+        recent_findings = store.findings[-f_count:] if f_count > 0 and store.findings else []
+        background_tasks.add_task(_persist_ingestion_safely, recent_events, recent_findings)
     return result
 
 
@@ -125,140 +144,68 @@ async def ingest_event_batch(
 async def load_sample_dataset(
     sample_type: Literal["synthetic", "cloudtrail", "azure", "gcp", "attack_scenario"],
     limit: Optional[int] = Query(None, ge=1, le=50000, description="Optional cap on records to ingest"),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
 ) -> IngestionResult:
     # Try reading from datasets directory if present
     base_dir = Path(__file__).resolve().parent.parent.parent.parent.parent.parent
     synthetic_dir = base_dir / "datasets" / "synthetic"
 
+    result: IngestionResult
     if sample_type == "synthetic":
         synthetic_csv = synthetic_dir / "cloud_security_events.csv"
         if synthetic_csv.exists():
             with open(synthetic_csv, "rb") as f:
                 content = f.read()
-            return pipeline.parse_csv_bytes(content, filename="cloud_security_events.csv")
+            result = pipeline.parse_csv_bytes(content, filename="cloud_security_events.csv")
+        else:
+            result = pipeline.process_raw_records([], filename="synthetic_empty.json")
 
     elif sample_type == "cloudtrail":
         ct_file = synthetic_dir / "aws_cloudtrail_events.json"
         if ct_file.exists():
             with open(ct_file, "rb") as f:
                 content = f.read()
-            return pipeline.parse_json_bytes(content, filename="aws_cloudtrail_events.json")
+            result = pipeline.parse_json_bytes(content, filename="aws_cloudtrail_events.json")
+        else:
+            result = pipeline.process_raw_records([], filename="cloudtrail_empty.json")
 
     elif sample_type == "azure":
         az_file = synthetic_dir / "azure_activity_events.json"
         if az_file.exists():
             with open(az_file, "rb") as f:
                 content = f.read()
-            return pipeline.parse_json_bytes(content, filename="azure_activity_events.json")
+            result = pipeline.parse_json_bytes(content, filename="azure_activity_events.json")
+        else:
+            result = pipeline.process_raw_records([], filename="azure_empty.json")
 
     elif sample_type == "gcp":
         gcp_file = synthetic_dir / "gcp_audit_events.json"
         if gcp_file.exists():
             with open(gcp_file, "rb") as f:
                 content = f.read()
-            return pipeline.parse_json_bytes(content, filename="gcp_audit_events.json")
+            result = pipeline.parse_json_bytes(content, filename="gcp_audit_events.json")
+        else:
+            result = pipeline.process_raw_records([], filename="gcp_empty.json")
 
     elif sample_type == "attack_scenario":
         atk_file = synthetic_dir / "multi_stage_attack_scenario.json"
         if atk_file.exists():
             with open(atk_file, "rb") as f:
                 content = f.read()
-            return pipeline.parse_json_bytes(content, filename="multi_stage_attack_scenario.json")
+            result = pipeline.parse_json_bytes(content, filename="multi_stage_attack_scenario.json")
+        else:
+            result = pipeline.process_raw_records([], filename="attack_empty.json")
 
-    # Fallback to inline representative samples if files are missing
-    if sample_type == "cloudtrail":
-        samples = [
-            {
-                "eventID": "trail-001",
-                "eventTime": "2026-09-01T12:00:00Z",
-                "eventName": "DeleteTrail",
-                "eventSource": "cloudtrail.amazonaws.com",
-                "awsRegion": "us-east-1",
-                "sourceIPAddress": "198.51.100.24",
-                "userIdentity": {"type": "IAMUser", "userName": "attacker_session", "mfaAuthenticated": "false"},
-                "resources": [{"ARN": "arn:aws:cloudtrail:us-east-1:123456789012:trail/security-trail"}],
-            },
-            {
-                "eventID": "trail-002",
-                "eventTime": "2026-09-01T12:05:00Z",
-                "eventName": "PutBucketPolicy",
-                "eventSource": "s3.amazonaws.com",
-                "awsRegion": "us-east-1",
-                "sourceIPAddress": "203.0.113.88",
-                "userIdentity": {"type": "Root", "userName": "root", "mfaAuthenticated": "false"},
-                "resources": [{"ARN": "arn:aws:s3:::cloudshield-prod-financial-data"}],
-            },
-            {
-                "eventID": "trail-003",
-                "eventTime": "2026-09-01T12:10:00Z",
-                "eventName": "GetObject",
-                "eventSource": "s3.amazonaws.com",
-                "awsRegion": "us-east-1",
-                "sourceIPAddress": "10.0.1.15",
-                "userIdentity": {"type": "IAMUser", "userName": "app_worker", "mfaAuthenticated": "true"},
-                "resources": [{"ARN": "arn:aws:s3:::cloudshield-prod-analytics"}],
-            },
-        ]
-    elif sample_type == "azure":
-        samples = [
-            {
-                "correlationId": "azr-001",
-                "eventTimestamp": "2026-09-01T12:15:00Z",
-                "operationName": "Microsoft.Network/networkSecurityGroups/securityRules/write",
-                "caller": "devops_admin@contoso.com",
-                "resourceId": "/subscriptions/sub-1/resourceGroups/rg-prod/providers/Microsoft.Network/networkSecurityGroups/nsg-core",
-                "status": "Succeeded",
-            },
-            {
-                "correlationId": "azr-002",
-                "eventTimestamp": "2026-09-01T12:20:00Z",
-                "operationName": "Microsoft.Authorization/roleAssignments/write",
-                "caller": "svc-automation-principal",
-                "resourceId": "/subscriptions/sub-1/providers/Microsoft.Authorization/roleAssignments/role-owner",
-                "status": "Succeeded",
-            },
-        ]
-    else:  # synthetic / gcp / attack_scenario fallback
-        samples = [
-            {
-                "event_id": "syn-001",
-                "timestamp": "2026-09-01T12:30:00Z",
-                "cloud_provider": "aws",
-                "action": "DisableKey",
-                "actor_type": "root",
-                "actor_name": "root",
-                "resource_type": "AWS::KMS::Key",
-                "resource_id": "arn:aws:kms:us-east-1:123456789012:key/key-7788",
-                "outcome": "Success",
-                "mfa_used": False,
-            },
-            {
-                "event_id": "syn-002",
-                "timestamp": "2026-09-01T12:35:00Z",
-                "cloud_provider": "gcp",
-                "action": "storage.buckets.setIamPolicy",
-                "actor_type": "user",
-                "actor_name": "security_engineer@gcp.com",
-                "resource_type": "storage.googleapis.com/Bucket",
-                "resource_id": "projects/_/buckets/cloudshield-reports",
-                "outcome": "Success",
-                "mfa_used": True,
-            },
-            {
-                "event_id": "syn-003",
-                "timestamp": "2026-09-01T12:40:00Z",
-                "cloud_provider": "azure",
-                "action": "Microsoft.Compute/virtualMachines/write",
-                "actor_type": "user",
-                "actor_name": "developer_bob@contoso.com",
-                "resource_type": "Microsoft.Compute/virtualMachines",
-                "resource_id": "/subscriptions/sub-1/resourceGroups/rg-prod/virtualMachines/vm-app-01",
-                "outcome": "Success",
-                "mfa_used": True,
-            },
-        ]
+    else:
+        result = pipeline.process_raw_records([], filename=f"sample_{sample_type}.json")
 
-    return pipeline.process_raw_records(samples, filename=f"sample_{sample_type}.json")
+    if result.successful_events > 0:
+        recent_events = store.events[-result.successful_events:] if store.events else []
+        f_count = result.risk_summary.get("findings_count", 0)
+        recent_findings = store.findings[-f_count:] if f_count > 0 and store.findings else []
+        background_tasks.add_task(_persist_ingestion_safely, recent_events, recent_findings)
+
+    return result
 
 
 @router.get(

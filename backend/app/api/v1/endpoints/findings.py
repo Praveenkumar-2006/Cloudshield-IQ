@@ -17,6 +17,7 @@ from app.core.database import (
 )
 from app.core.logging import get_logger
 from app.repositories.findings import FindingRepository
+from app.services.ingestion import get_ingestion_store
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -95,7 +96,8 @@ async def list_security_findings(
 ) -> dict[str, Any]:
     """
     List security findings with multi-cloud filtering, severity sorting, and full-text search.
-    Falls back gracefully if the database is offline.
+    Prioritizes PostgreSQL database persistence, falls back to ingested in-memory telemetry,
+    and labels data_source clearly.
     """
     if is_db_available():
         try:
@@ -115,6 +117,7 @@ async def list_security_findings(
                     "total": total,
                     "offset": offset,
                     "limit": limit,
+                    "data_source": "database",
                     "findings": [
                         {
                             "finding_id": f.finding_id,
@@ -139,9 +142,61 @@ async def list_security_findings(
                 }
         except Exception as exc:
             mark_db_unavailable()
-            logger.warning("Database query failed, returning fallback findings", error=str(exc))
+            logger.warning("Database query failed, checking in-memory store", error=str(exc))
 
-    # Dev fallback mode
+    # Check in-memory ingestion store (from uploaded files or loaded samples)
+    store = get_ingestion_store()
+    if store.findings:
+        filtered = list(store.findings)
+        if cloud and cloud.upper() != "ALL":
+            filtered = [
+                f for f in filtered
+                if (f.cloud_provider.value if hasattr(f.cloud_provider, "value") else str(f.cloud_provider)).upper() == cloud.upper()
+            ]
+        if severity and severity.upper() != "ALL":
+            filtered = [
+                f for f in filtered
+                if (f.severity.value if hasattr(f.severity, "value") else str(f.severity)).upper() == severity.upper()
+            ]
+        if category and category.upper() != "ALL":
+            filtered = [f for f in filtered if f.category.upper() == category.upper()]
+        if status_filter and status_filter.upper() != "ALL":
+            filtered = [f for f in filtered if "OPEN" == status_filter.upper()]
+        if search:
+            term = search.lower()
+            filtered = [
+                f for f in filtered
+                if term in f.title.lower() or term in f.finding_id.lower() or term in f.resource_id.lower()
+            ]
+
+        page = filtered[offset : offset + limit]
+        return {
+            "total": len(filtered),
+            "offset": offset,
+            "limit": limit,
+            "data_source": "ingested_memory",
+            "findings": [
+                {
+                    "finding_id": f.finding_id,
+                    "title": f.title,
+                    "cloud_provider": f.cloud_provider.value if hasattr(f.cloud_provider, "value") else str(f.cloud_provider),
+                    "resource_id": f.resource_id,
+                    "category": f.category,
+                    "severity": f.severity.value if hasattr(f.severity, "value") else str(f.severity),
+                    "risk_score": f.risk_score,
+                    "shap_top_feature": f.shap_top_feature,
+                    "shap_impact": f.shap_impact,
+                    "compliance_violations": f.compliance_violations,
+                    "remediation_guidance": f.remediation_guidance,
+                    "cli_remediation_command": f.cli_remediation_command,
+                    "terraform_remediation_snippet": f.terraform_remediation_snippet,
+                    "status": "OPEN",
+                }
+                for f in page
+            ],
+        }
+
+    # Dev fallback mode when no data has been uploaded yet
     filtered = FALLBACK_FINDINGS
     if cloud and cloud.upper() != "ALL":
         filtered = [f for f in filtered if f["cloud_provider"].upper() == cloud.upper()]
@@ -152,6 +207,7 @@ async def list_security_findings(
         "total": len(filtered),
         "offset": 0,
         "limit": limit,
+        "data_source": "offline_fallback",
         "findings": filtered,
     }
 
@@ -187,6 +243,27 @@ async def get_finding_by_id(
         except Exception as exc:
             mark_db_unavailable()
             logger.warning("Database query failed for finding_id", finding_id=finding_id, error=str(exc))
+
+    # Check in-memory store
+    store = get_ingestion_store()
+    for f in store.findings:
+        if f.finding_id == finding_id:
+            return {
+                "finding_id": f.finding_id,
+                "title": f.title,
+                "cloud_provider": f.cloud_provider.value if hasattr(f.cloud_provider, "value") else str(f.cloud_provider),
+                "resource_id": f.resource_id,
+                "category": f.category,
+                "severity": f.severity.value if hasattr(f.severity, "value") else str(f.severity),
+                "risk_score": f.risk_score,
+                "shap_top_feature": f.shap_top_feature,
+                "shap_impact": f.shap_impact,
+                "compliance_violations": f.compliance_violations,
+                "remediation_guidance": f.remediation_guidance,
+                "cli_remediation_command": f.cli_remediation_command,
+                "terraform_remediation_snippet": f.terraform_remediation_snippet,
+                "status": "OPEN",
+            }
 
     for f in FALLBACK_FINDINGS:
         if f["finding_id"] == finding_id:
@@ -272,6 +349,28 @@ async def generate_finding_explanation(
         except Exception as exc:
             mark_db_unavailable()
             logger.warning("Database query failed during explain for finding_id", finding_id=finding_id, error=str(exc))
+
+    if not target_finding:
+        store = get_ingestion_store()
+        for f in store.findings:
+            if f.finding_id == finding_id:
+                target_finding = {
+                    "finding_id": f.finding_id,
+                    "title": f.title,
+                    "cloud_provider": f.cloud_provider.value if hasattr(f.cloud_provider, "value") else str(f.cloud_provider),
+                    "resource_id": f.resource_id,
+                    "category": f.category,
+                    "severity": f.severity.value if hasattr(f.severity, "value") else str(f.severity),
+                    "risk_score": f.risk_score,
+                    "shap_top_feature": f.shap_top_feature,
+                    "shap_impact": f.shap_impact,
+                    "compliance_violations": f.compliance_violations,
+                    "remediation_guidance": f.remediation_guidance,
+                    "cli_remediation_command": f.cli_remediation_command,
+                    "terraform_remediation_snippet": f.terraform_remediation_snippet,
+                    "status": "OPEN",
+                }
+                break
 
     if not target_finding:
         for f in FALLBACK_FINDINGS:

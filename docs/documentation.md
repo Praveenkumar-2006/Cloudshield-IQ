@@ -181,10 +181,10 @@ Multi-Cloud Security Telemetry (AWS CloudTrail / Azure Activity / GCP Audit / CS
 | **9** | Recommendation Engine | ✅ Done | 10 tri-language playbooks, multi-factor prioritizer, posture simulation engine. |
 | **10** | FastAPI Integration & API Gateway | ✅ Done | Central app factory, lifespan manager, 6 modular API sub-routers under `/api/v1`. |
 | **11** | PostgreSQL Integration & Repositories | ✅ Done | SQLAlchemy 2.0 async models, Alembic migrations, async repositories, circuit breaker. |
-| **12** | React Dashboard & UI/UX Design System | ✅ Done | Tactical dark carbon UI (`#0A0D12`), 6 views, SecOps drawer, zero purple gradients. |
+| **12** | React Dashboard & Real-Data Engine | ✅ Done | Real dataset upload (CSV/JSON), dynamic backend refresh, explicit data provenance badges, centralized API architecture, and tactical dark carbon UI. |
 | **13** | AWS Live Integration | 📐 Specified | Read-only IAM STS connector, CloudTrail SQS event stream ingestion. |
 | **14** | Azure & GCP Live Integrations | 📐 Specified | Azure Event Hub / Activity Log connector, GCP Pub/Sub Audit Log ingestion. |
-| **15** | Automated Multi-Tier Testing Framework | ✅ Done | **171 pytest backend tests (100%) + 30 Playwright E2E frontend tests (100%)**. |
+| **15** | Automated Multi-Tier Testing Framework | ✅ Done | **171 pytest backend tests (100%) + 30 Playwright E2E frontend tests (100%) across 9 test suites**. |
 | **16** | Dockerization & Container Orchestration | ✅ Done | `docker-compose.dev.yml`, `docker-compose.prod.yml`, multi-stage Dockerfiles for backend and frontend. |
 | **17** | Production Deployment & Hardening | ✅ Done | Nginx reverse proxy gateway, CSP/HSTS security headers, token-bucket rate limiting, non-root user execution. |
 | **18** | Documentation, Evaluation & Defense | 🟡 Active | Architectural documentation, ADR records, defense slide decks, thesis alignment. |
@@ -316,19 +316,41 @@ Multi-Cloud Security Telemetry (AWS CloudTrail / Azure Activity / GCP Audit / CS
 - **Self-Healing Circuit Breaker (`app/core/database.py`)**: Monitors PostgreSQL connection state. If PostgreSQL is offline during development or testing, the circuit breaker instantly trips to degraded dev fallback mode, serving simulated/mock data without 500 errors or connection timeouts.
 - **Non-Blocking Background Persistence**: Telemetry uploads schedule event writes via FastAPI `BackgroundTasks`, decoupling database I/O from client response latency.
 
-### Phase 12: React Dashboard & Tactical UI/UX Design System
+### Phase 12: React Dashboard & Real-Data Engine
 - **Tactical Carbon Design System (`frontend/src/index.css`)**:
   - Engineered with Vite, React 19, TypeScript, and Tailwind CSS.
   - Deep carbon background (`#0A0D12`), layered dark surfaces (`#111620`, `#161D2A`), 1px hairline borders (`rgba(255, 255, 255, 0.07)`), and elevation shadows.
   - Zero generic purple/blue gradients; strict cybersecurity color identity with emerald (`#10B981`), amber (`#F59E0B`), and rose (`#F43F5E`) tactical accents.
   - Typography powered by Google Fonts Fira Code, JetBrains Mono, and Inter.
 - **6 Primary Operational Dashboard Views**:
-  1. **Executive Overview**: Real-time composite risk gauge, multi-cloud audited asset counts, MITRE ATT&CK coverage, high-priority alert cards, and posture trend visualizations.
-  2. **Security Findings Master-Detail Explorer**: Interactive search, cloud provider filters (AWS/Azure/GCP), severity tabs, deep finding inspector, 1-click CLI and Terraform code copying, and triage lifecycle status updates.
-  3. **Multi-Cloud Compliance Matrix**: Framework cards (CIS AWS/Azure/GCP, NIST, ISO, PCI-DSS), passing/failing control chips, failed resource inspector, and audit JSON report export.
-  4. **Machine Learning & TreeSHAP Explainer**: Unsupervised Isolation Forest anomaly scanner, Supervised XGBoost risk classifier, interactive TreeSHAP local waterfall attribution breakdown (risk-elevating vs risk-mitigating feature deltas), and global feature importance rankings.
+  1. **Executive Overview**: Dynamic composite risk gauge, audited asset tallies, MITRE ATT&CK coverage, high-priority finding cards, and polled telemetry stream.
+  2. **Security Findings Master-Detail Explorer**: Interactive search, cloud provider filters (AWS/Azure/GCP), severity tabs, deep finding inspector, 1-click CLI and Terraform code copying, grounded narrative explanation generator, and triage lifecycle status updates.
+  3. **Multi-Cloud Compliance Matrix**: Dynamic framework cards (CIS AWS/Azure/GCP, NIST, ISO, PCI-DSS), passing/failing control chips, evaluated/failed resource inspector, and server-side JSON audit report export.
+  4. **Machine Learning & TreeSHAP Explainer**: Unsupervised Isolation Forest anomaly scanner, Supervised XGBoost risk classifier, interactive TreeSHAP local waterfall attribution breakdown (risk-elevating vs risk-mitigating feature deltas), and global feature importance rankings driven by actual ingested events.
   5. **SecOps Remediation Console Drawer**: Slide-over terminal drawer, contextual playbook synthesis, dynamic parameter substitution, multi-language code tabs (CLI, Terraform, Python), and perimeter posture simulation.
-  6. **Telemetry Ingestion & Simulation**: Multi-cloud JSON/CSV upload dropzone, synthetic telemetry generators, live risk parameter sliders (0-100), and immediate hybrid evaluation.
+  6. **Telemetry Ingestion & Dataset Management**: Multipart CSV/JSON file upload, 5 quick-load benchmark datasets, live progress reporting, ingestion error handling, and rich post-ingestion analytics summary.
+- **Centralized API Architecture (`frontend/src/api/`)**:
+  - **Configuration (`config.ts`)**: Single centralized API base endpoint referencing `import.meta.env.VITE_API_URL` (defaulting to `http://localhost:8001/api/v1`). Eliminates duplicated or hardcoded hosts/ports across all components. Configurable request and upload timeouts (30s).
+  - **Typed API Client (`client.ts`)**: Comprehensive TypeScript service interfaces for System Health, Telemetry Ingestion, Findings, Compliance, Machine Learning, and TreeSHAP explainers. Fully mapped types with null guards, missing value defaults, and network error interception.
+- **Real Dataset Upload & Persistence Pipeline**:
+  - **Multipart Ingestion (`POST /api/v1/ingestion/upload`)**: Operators select and upload raw multi-cloud CSV or JSON telemetry dumps. Dispatches native `FormData` without manual `Content-Type` overrides.
+  - **Backend Pipeline Execution**: The FastAPI ingestion service parses records, performs canonical normalization via `TelemetryNormalizer`, evaluates heuristic rules, runs unsupervised Isolation Forest anomaly scoring and supervised XGBoost risk classification, executes deterministic compliance rule evaluation, and computes additive TreeSHAP feature attributions.
+  - **PostgreSQL Persistence**: Ingestion results and normalized events are scheduled for non-blocking persistence using `EventRepository.create_batch_from_models` and `FindingRepository.create_batch_from_schemas`.
+  - **Immediate Reactive Refresh**: Upon upload completion, the frontend triggers synchronized backend queries across all operational endpoints (`/findings`, `/ingestion/stats`, `/ingestion/events`, `/compliance/summary`, `/compliance/controls`, `/ml/model-info`, `/ml/risk-model-info`, `/ml/explain/global`), instantly populating the entire dashboard with real dataset-derived analytics.
+- **Data Source Provenance & Visual Transparency**:
+  - To prevent operator deception and uphold academic integrity, the dashboard actively detects and highlights data origins using distinctive HUD badges:
+    - `● REAL DATABASE DATA`: Verified telemetry and findings persisted in PostgreSQL and served via SQLAlchemy 2.0 repositories.
+    - `● INGESTED STREAM`: Live-ingested events loaded into the active FastAPI in-memory state.
+    - `▲ OFFLINE FALLBACK DATA`: Explicitly labeled offline baseline fallback shown when the backend API or database is unreachable.
+    - `○ NO INGESTED DATA`: Zero-state indicator prompting the operator to upload a dataset.
+  - Telemetry ticker displays polled event stream (`● Polled Feed (5s)` / `❚❚ Paused`) fetching actual records from `GET /api/v1/ingestion/events`; random `Math.random()` ticker simulations have been completely eliminated.
+- **Four Operational Telemetry & Processing Modes**:
+  1. **Real Dataset Upload Mode**: Ingests real user-downloaded AWS CloudTrail, Azure Activity, or GCP Cloud Audit log files in CSV or JSON format, running the full end-to-end normalization, ML risk, compliance, and persistence pipeline.
+  2. **Bundled Multi-Cloud Benchmark Mode**: 5 pre-packaged multi-cloud benchmark datasets (AWS CloudTrail, Azure Activity Log, GCP Audit Log, Multi-Stage Attack Scenario, Synthetic CSV) for reproducible academic benchmarking, demonstrations, and standardized evaluations.
+  3. **Synthetic / Demo Mode**: Explicitly isolated testing and edge-case simulation tools (`Simulate Ingestion Error`, `Reset Ingestion`, manual single-event feature sliders). All synthetic items are strictly labeled as `(Demo/Test Event)` to prevent operational confusion.
+  4. **Offline / Standalone Degraded Fallback Mode**: If the backend service is stopped or PostgreSQL trips the self-healing circuit breaker, the dashboard cleanly displays visual offline indicators and falls back to cached baseline schemas without crashing or fabricating live results.
+  *Important Note on Live Streaming*: Live control-plane streaming (AWS STS + SQS FIFO, Azure Event Hubs, GCP Pub/Sub) is fully specified in Phase 13 and Phase 14 as a production technical specification. It requires read-only cloud IAM credentials and message queues, and is never claimed as currently active streaming.
+
 
 ### Grounded LLM Explanation Layer & Anti-Hallucination Guardrails
 - **Core Purpose**: Transforms complex, multi-component security intelligence (Isolation Forest anomalies, XGBoost risk scores, TreeSHAP feature attributions, CIS/NIST compliance findings, and remediation playbooks) into clear, professional, human-readable security narratives.
@@ -421,13 +443,14 @@ Multi-Cloud Security Telemetry (AWS CloudTrail / Azure Activity / GCP Audit / CS
 | **GCP** | Service Account / Workload Identity | Google Cloud Audit Logs | Log Router Sink $\to$ Cloud Pub/Sub | `normalize_gcp_audit_log` |
 
 ### Phase 15: Automated Multi-Tier Testing Framework
-- **Backend Test Suite (Pytest - 161 Tests Passing)**:
+- **Backend Test Suite (Pytest - 171 Tests Passing)**:
   - 18 integration tests in `tests/integration/test_repositories.py` verifying async CRUD, filtering, and transactions across all repository classes.
-  - 143 unit tests across `tests/unit/backend/`, `tests/unit/compliance/`, `tests/unit/ml/`, and `tests/unit/recommendations/`.
+  - 153 unit tests across `tests/unit/backend/` (74 tests including ingestion upload, persistence, and finding API verification), `tests/unit/compliance/`, `tests/unit/ml/`, and `tests/unit/recommendations/`.
   - 100% pass rate achieved with zero regressions.
-- **Frontend E2E Test Suite (Playwright - 26 Tests Passing)**:
-  - 26 tests across 8 spec files (`navigation.spec.ts`, `theme-styles.spec.ts`, `findings.spec.ts`, `compliance.spec.ts`, `ml-engine.spec.ts`, `secops-console.spec.ts`, `ingestion.spec.ts`, `explainability.spec.ts`).
-  - Strict assertions validating tactical `#0A0D12` carbon styles, absence of purple/blue gradients, master-detail selection, TreeSHAP waterfall rendering, and terminal execution.
+- **Frontend E2E Test Suite (Playwright - 30 Tests Passing)**:
+  - 30 tests across 9 spec files (`navigation.spec.ts`, `theme-styles.spec.ts`, `findings.spec.ts`, `compliance.spec.ts`, `ml-engine.spec.ts`, `secops-console.spec.ts`, `ingestion.spec.ts`, `explainability.spec.ts`, `grounded-explanation.spec.ts`).
+  - Strict assertions validating tactical `#0A0D12` carbon styles, absence of purple/blue gradients, master-detail selection, TreeSHAP waterfall rendering, multipart telemetry upload flow, and grounded explanation generation.
+
 
 ### Phase 16: Dockerization & Container Orchestration
 - **Development Topology (`deployment/docker/docker-compose.dev.yml`)**:
@@ -654,6 +677,7 @@ All endpoints are hosted under `/api/v1` (with `/health` accessible at root for 
 | `GET` | `/api/v1/findings` | Multi-cloud security findings list with search and filters | Phase 11 | 200 |
 | `GET` | `/api/v1/findings/{finding_id}` | Granular finding detail with CLI/Terraform remediation commands | Phase 11 | 200, 404 |
 | `PATCH` | `/api/v1/findings/{finding_id}/status` | Triage state update (`OPEN`, `INVESTIGATING`, `RESOLVED`, `FALSE_POSITIVE`) | Phase 11 | 200, 422 |
+| `POST` | `/api/v1/findings/{finding_id}/explain` | Grounded multi-facet SOC security narrative explanation | Phase 10, 12 | 200, 404 |
 
 Interactive Swagger UI documentation is available at: `http://127.0.0.1:8001/api/docs`
 

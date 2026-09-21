@@ -44,6 +44,40 @@ class FindingRepository(BaseRepository[SecurityFindingModel]):
         )
         return await self.create(model)
 
+    async def create_batch_from_schemas(
+        self,
+        findings: list[SecurityFinding],
+    ) -> int:
+        """Bulk convert and persist a batch of actionable security findings."""
+        if not findings:
+            return 0
+        now = datetime.now(timezone.utc)
+        count = 0
+        for f in findings:
+            existing = await self.get_by_id(f.finding_id)
+            if not existing:
+                model = SecurityFindingModel(
+                    finding_id=f.finding_id,
+                    title=f.title,
+                    cloud_provider=f.cloud_provider.value if hasattr(f.cloud_provider, "value") else str(f.cloud_provider),
+                    resource_id=f.resource_id,
+                    category=f.category,
+                    severity=f.severity.value.upper() if hasattr(f.severity, "value") else str(f.severity).upper(),
+                    risk_score=f.risk_score,
+                    shap_top_feature=f.shap_top_feature,
+                    shap_impact=f.shap_impact,
+                    compliance_violations=f.compliance_violations,
+                    remediation_guidance=f.remediation_guidance,
+                    cli_remediation_command=f.cli_remediation_command,
+                    terraform_remediation_snippet=f.terraform_remediation_snippet,
+                    status="OPEN",
+                    detected_at=now,
+                )
+                self.session.add(model)
+                count += 1
+        await self.session.flush()
+        return count
+
     async def list_findings(
         self,
         cloud_provider: Optional[str] = None,

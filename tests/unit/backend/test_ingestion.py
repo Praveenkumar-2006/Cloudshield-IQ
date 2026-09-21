@@ -175,3 +175,33 @@ class TestIngestionAPIEndpoints:
         assert findings_resp.status_code == 200
         findings_data = findings_resp.json()
         assert "findings" in findings_data
+
+    def test_end_to_end_upload_and_findings_retrieval(self, client):
+        """Verify uploaded dataset results propagate to /api/v1/findings and /compliance/summary."""
+        csv_content = (
+            "timestamp,cloud_provider,resource_type,action,actor_type,actor_name,mfa_used,outcome\n"
+            "2026-09-01T12:00:00Z,aws,AWS::IAM::Root,ConsoleLogin,root,root,false,Success\n"
+            "2026-09-01T12:05:00Z,aws,AWS::S3::Bucket,PutBucketPolicy,root,root,false,Success\n"
+        )
+        upload_resp = client.post(
+            "/api/v1/ingestion/upload",
+            files={"file": ("incident_stream.csv", csv_content, "text/csv")},
+        )
+        assert upload_resp.status_code == 200
+        result = upload_resp.json()
+        assert result["successful_events"] == 2
+        assert result["risk_summary"]["findings_count"] >= 1
+
+        # Check findings API reflects uploaded data
+        findings_resp = client.get("/api/v1/findings")
+        assert findings_resp.status_code == 200
+        findings_data = findings_resp.json()
+        assert findings_data["total"] >= 1
+        assert findings_data.get("data_source") in ("database", "ingested_memory")
+
+        # Check compliance summary evaluated uploaded events
+        comp_resp = client.get("/api/v1/compliance/summary")
+        assert comp_resp.status_code == 200
+        comp_data = comp_resp.json()
+        assert "overall_pass_rate" in comp_data
+        assert "framework_scores" in comp_data
