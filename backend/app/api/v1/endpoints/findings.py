@@ -92,6 +92,7 @@ async def list_security_findings(
     search: Optional[str] = Query(None, description="Search term across title, ID, or ARN"),
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
+    include_fallback: bool = Query(True, description="Enable fallback fixtures for offline/test mode"),
     db: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     """
@@ -161,7 +162,10 @@ async def list_security_findings(
         if category and category.upper() != "ALL":
             filtered = [f for f in filtered if f.category.upper() == category.upper()]
         if status_filter and status_filter.upper() != "ALL":
-            filtered = [f for f in filtered if "OPEN" == status_filter.upper()]
+            filtered = [
+                f for f in filtered
+                if (getattr(f, "status", "OPEN") or "OPEN").upper() == status_filter.upper()
+            ]
         if search:
             term = search.lower()
             filtered = [
@@ -190,25 +194,34 @@ async def list_security_findings(
                     "remediation_guidance": f.remediation_guidance,
                     "cli_remediation_command": f.cli_remediation_command,
                     "terraform_remediation_snippet": f.terraform_remediation_snippet,
-                    "status": "OPEN",
+                    "status": getattr(f, "status", "OPEN") or "OPEN",
                 }
                 for f in page
             ],
         }
 
-    # Dev fallback mode when no data has been uploaded yet
-    filtered = FALLBACK_FINDINGS
-    if cloud and cloud.upper() != "ALL":
-        filtered = [f for f in filtered if f["cloud_provider"].upper() == cloud.upper()]
-    if severity and severity.upper() != "ALL":
-        filtered = [f for f in filtered if f["severity"].upper() == severity.upper()]
+    # Dev fallback mode only when explicitly requested
+    if include_fallback:
+        filtered = FALLBACK_FINDINGS
+        if cloud and cloud.upper() != "ALL":
+            filtered = [f for f in filtered if f["cloud_provider"].upper() == cloud.upper()]
+        if severity and severity.upper() != "ALL":
+            filtered = [f for f in filtered if f["severity"].upper() == severity.upper()]
+
+        return {
+            "total": len(filtered),
+            "offset": 0,
+            "limit": limit,
+            "data_source": "offline_fallback",
+            "findings": filtered,
+        }
 
     return {
-        "total": len(filtered),
-        "offset": 0,
+        "total": 0,
+        "offset": offset,
         "limit": limit,
-        "data_source": "offline_fallback",
-        "findings": filtered,
+        "data_source": "no_data",
+        "findings": [],
     }
 
 
@@ -262,7 +275,7 @@ async def get_finding_by_id(
                 "remediation_guidance": f.remediation_guidance,
                 "cli_remediation_command": f.cli_remediation_command,
                 "terraform_remediation_snippet": f.terraform_remediation_snippet,
-                "status": "OPEN",
+                "status": getattr(f, "status", "OPEN") or "OPEN",
             }
 
     for f in FALLBACK_FINDINGS:
@@ -286,26 +299,34 @@ async def update_finding_triage_status(
             detail="Status must be one of: OPEN, IN_PROGRESS, RESOLVED",
         )
 
+    resolved_at_str = None
     if is_db_available():
         try:
             repo = FindingRepository(db)
             updated = await repo.update_status(finding_id, target_status)
             reset_db_availability()
             if updated:
-                return {
-                    "finding_id": updated.finding_id,
-                    "status": updated.status,
-                    "resolved_at": updated.resolved_at.isoformat() if updated.resolved_at else None,
-                    "message": f"Finding '{finding_id}' updated to {target_status}.",
-                }
+                resolved_at_str = updated.resolved_at.isoformat() if updated.resolved_at else None
         except Exception as exc:
             mark_db_unavailable()
             logger.warning("Database update failed for finding_id", finding_id=finding_id, error=str(exc))
 
+    # Also update in in-memory store
+    store = get_ingestion_store()
+    for f in store.findings:
+        if f.finding_id == finding_id:
+            f.status = target_status
+
+    # Also update in FALLBACK_FINDINGS if present
+    for f in FALLBACK_FINDINGS:
+        if f["finding_id"] == finding_id:
+            f["status"] = target_status
+
     return {
         "finding_id": finding_id,
         "status": target_status,
-        "message": f"Finding '{finding_id}' triage status set to {target_status} (Dev Mode).",
+        "resolved_at": resolved_at_str,
+        "message": f"Finding '{finding_id}' updated to {target_status}.",
     }
 
 

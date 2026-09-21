@@ -20,7 +20,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-cloudshield_iq}
       POSTGRES_USER: ${POSTGRES_USER:-cloudshield}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_in_production_strict_key}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD environment variable is required in production}
     volumes:
       - postgres_prod_data:/var/lib/postgresql/data
       - ./../../database/seeds:/docker-entrypoint-initdb.d:ro
@@ -51,11 +51,11 @@ services:
       APP_NAME: "CloudShield IQ"
       APP_ENV: "production"
       DEBUG: "false"
-      SECRET_KEY: ${SECRET_KEY:-cloudshield_production_secret_key_minimum_32_chars_long!}
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cloudshield}:${POSTGRES_PASSWORD:-change_me_in_production_strict_key}@postgres:5432/${POSTGRES_DB:-cloudshield_iq}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY environment variable is required in production}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cloudshield}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD environment variable is required in production}@postgres:5432/${POSTGRES_DB:-cloudshield_iq}
       DATABASE_POOL_SIZE: 20
       DATABASE_MAX_OVERFLOW: 30
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-cloudshield_production_jwt_key_minimum_32_chars_long!}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY environment variable is required in production}
       CORS_ALLOWED_ORIGINS: '["http://localhost", "http://127.0.0.1"]'
       UPLOAD_DIR: "/app/uploads"
       MODEL_DIR: "/app/ml/models"

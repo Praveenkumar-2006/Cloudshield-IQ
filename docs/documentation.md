@@ -314,7 +314,7 @@ Multi-Cloud Security Telemetry (AWS CloudTrail / Azure Activity / GCP Audit / CS
   - `AssessmentRepository`: Anomaly scores, dual-head risk ratings, SHAP attribution persistence.
   - `ComplianceRepository`: Control evaluations and framework pass rate rollups.
 - **Self-Healing Circuit Breaker (`app/core/database.py`)**: Monitors PostgreSQL connection state. If PostgreSQL is offline during development or testing, the circuit breaker instantly trips to degraded dev fallback mode, serving simulated/mock data without 500 errors or connection timeouts.
-- **Non-Blocking Background Persistence**: Telemetry uploads schedule event writes via FastAPI `BackgroundTasks`, decoupling database I/O from client response latency.
+- **Synchronous Direct Persistence**: Telemetry uploads await event and finding database writes (`await _persist_ingestion_safely`) before returning to the caller. This eliminates race conditions between the upload HTTP response and immediate subsequent dashboard refresh queries.
 
 ### Phase 12: React Dashboard & Real-Data Engine
 - **Tactical Carbon Design System (`frontend/src/index.css`)**:
@@ -375,6 +375,12 @@ Multi-Cloud Security Telemetry (AWS CloudTrail / Azure Activity / GCP Audit / CS
     4. **Verified Evidence**: Bulleted list of verified pipeline facts (e.g., lack of MFA, root account authentication, behavioral outlier flag).
     5. **Compliance Impact**: Specific regulatory controls violated.
     6. **Recommended Action**: Prescribed non-destructive remediation with CLI command highlighting.
+- **Deterministic Grounding Verification Step (`verify_llm_grounding`)**:
+  - Validates that external LLM outputs never contradict verified pipeline evidence before being labeled grounded.
+  - Verifies finding ID and severity match the `EvidencePack`.
+  - Rejects outputs containing foreign or invented cloud resource ARNs or external IP addresses.
+  - Ensures compliance violation claims are strictly limited to verified controls in the evidence pack.
+  - Discards unverified outputs and falls back to deterministic grounded synthesis if verification fails.
 
 ### Phase 13: AWS Live Integration (Technical Specification)
 - **Zero-Write Architectural Principles**:

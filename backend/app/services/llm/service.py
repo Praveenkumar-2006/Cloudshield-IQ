@@ -207,10 +207,105 @@ class GroundedExplanationService:
         )
 
     @classmethod
+    def verify_llm_grounding(cls, parsed: Any, evidence: EvidencePack) -> tuple[bool, float]:
+        """
+        Deterministically verifies that external LLM output references only allowed EvidencePack facts.
+        Returns:
+            (is_valid: bool, grounding_score: float)
+        """
+        import re
+
+        if hasattr(parsed, "model_dump"):
+            parsed_dict = parsed.model_dump()
+        elif isinstance(parsed, dict):
+            parsed_dict = parsed
+        elif hasattr(parsed, "__dict__"):
+            parsed_dict = vars(parsed)
+        else:
+            parsed_dict = {}
+
+        # 0. Finding ID check
+        if parsed_dict.get("finding_id") and parsed_dict.get("finding_id") != evidence.finding_id:
+            logger.warning(
+                "LLM output failed grounding check: finding_id mismatch",
+                expected=evidence.finding_id,
+                got=parsed_dict.get("finding_id"),
+            )
+            return False, 0.0
+
+        # 1. Risk/severity check: Model must not contradict verified severity
+        model_risk = str(parsed_dict.get("risk", "")).upper()
+        if model_risk and model_risk != evidence.severity.upper():
+            logger.warning(
+                "LLM output failed grounding check: severity mismatch",
+                expected=evidence.severity,
+                got=model_risk,
+            )
+            return False, 0.0
+
+        full_text = " ".join([
+            str(parsed_dict.get("what_happened", "")),
+            str(parsed_dict.get("why_it_matters", "")),
+            " ".join(str(e) for e in parsed_dict.get("evidence", [])),
+            str(parsed_dict.get("compliance_impact", "")),
+            str(parsed_dict.get("recommended_action", "")),
+        ])
+
+        # 2. Check for foreign cloud resource ARNs
+        arn_pattern = re.compile(r"arn:aws:[a-z0-9\-]+:[a-z0-9\-]*:[0-9]*:[a-zA-Z0-9\-_/]+")
+        for found_arn in arn_pattern.findall(full_text):
+            if found_arn.lower() != evidence.resource_id.lower():
+                logger.warning(
+                    "LLM output failed grounding check: foreign ARN invented",
+                    found_arn=found_arn,
+                    expected=evidence.resource_id,
+                )
+                return False, 0.0
+
+        # 3. Check for foreign IP addresses
+        ip_pattern = re.compile(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b")
+        for found_ip in ip_pattern.findall(full_text):
+            allowed_ips = {evidence.source_ip} if evidence.source_ip else set()
+            if found_ip not in allowed_ips and not found_ip.startswith("0.0.0.0"):
+                logger.warning(
+                    "LLM output failed grounding check: foreign IP invented",
+                    found_ip=found_ip,
+                    expected=evidence.source_ip,
+                )
+                return False, 0.0
+
+        # 4. Check compliance references: if specific control IDs are cited, ensure they are in evidence
+        control_pattern = re.compile(r"\b(CIS-[A-Z]+-\d+\.\d+|NIST-[A-Z]+-\d+|ISO-\d+|PCI-DSS-\d+)\b", re.IGNORECASE)
+        allowed_violations = [v.upper().replace(" ", "-") for v in evidence.compliance_violations]
+        for found_ctrl in control_pattern.findall(full_text):
+            normalized = found_ctrl.upper().replace(" ", "-")
+            if not any(normalized in v or v in normalized for v in allowed_violations):
+                logger.warning(
+                    "LLM output failed grounding check: unauthorized compliance control cited",
+                    control=found_ctrl,
+                )
+                return False, 0.0
+
+        # Calculate grounding score based on verified elements present
+        checks = 0
+        total_checks = 4
+        if (evidence.resource_id and evidence.resource_id.lower() in full_text.lower()) or (evidence.action and evidence.action.lower() in full_text.lower()):
+            checks += 1
+        if not evidence.actor_name or evidence.actor_name.lower() in full_text.lower():
+            checks += 1
+        if isinstance(parsed_dict.get("evidence"), list) and len(parsed_dict.get("evidence", [])) > 0:
+            checks += 1
+        if model_risk == evidence.severity.upper():
+            checks += 1
+
+        grounding_score = round(max(0.75, min(0.98, checks / total_checks)), 2)
+        return True, grounding_score
+
+    @classmethod
     async def _generate_via_external_llm(cls, evidence: EvidencePack) -> Optional[SecurityExplanation]:
         """
         Query an external LLM using a structured, ground-truth-bounded prompt.
-        Validates the response against the SecurityExplanation schema.
+        Validates the response against the SecurityExplanation schema and verifies grounding.
         """
         settings = get_settings()
         api_key = settings.LLM_API_KEY.get_secret_value() if settings.LLM_API_KEY else ""
@@ -270,6 +365,14 @@ class GroundedExplanationService:
                 content = data["choices"][0]["message"]["content"]
                 parsed = json.loads(content)
 
+                is_grounded, calculated_score = cls.verify_llm_grounding(parsed, evidence)
+                if not is_grounded:
+                    logger.warning(
+                        "LLM output rejected by deterministic verifier; falling back to deterministic synthesis",
+                        finding_id=evidence.finding_id,
+                    )
+                    return None
+
                 return SecurityExplanation(
                     finding_id=evidence.finding_id,
                     risk=evidence.severity,  # Never allow model to override verified risk
@@ -278,10 +381,13 @@ class GroundedExplanationService:
                     evidence=parsed.get("evidence", []),
                     compliance_impact=parsed.get("compliance_impact", ""),
                     recommended_action=parsed.get("recommended_action", evidence.remediation_guidance),
-                    grounding_score=1.0,
+                    grounding_score=calculated_score,
                     is_llm_generated=True,
                     generated_at=datetime.now(timezone.utc).isoformat(),
                     model_used=settings.LLM_MODEL,
                 )
 
         return None
+
+
+verify_llm_grounding = GroundedExplanationService.verify_llm_grounding

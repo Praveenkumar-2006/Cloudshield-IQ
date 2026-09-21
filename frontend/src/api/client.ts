@@ -79,6 +79,7 @@ export interface TelemetryEvent {
   actor_name: string;
   outcome: string;
   mfa_used?: boolean;
+  source_ip?: string;
 }
 
 export interface Finding {
@@ -309,6 +310,7 @@ export async function fetchFindings(params?: {
   status?: string;
   search?: string;
   limit?: number;
+  includeFallback?: boolean;
 }): Promise<{ total: number; findings: Finding[]; data_source?: string }> {
   const query = new URLSearchParams();
   if (params?.cloud && params.cloud !== 'ALL') query.set('cloud', params.cloud);
@@ -317,6 +319,7 @@ export async function fetchFindings(params?: {
   if (params?.status && params.status !== 'ALL') query.set('status', params.status);
   if (params?.search) query.set('search', params.search);
   if (params?.limit) query.set('limit', String(params.limit));
+  if (params?.includeFallback) query.set('include_fallback', 'true');
 
   const url = `${API_BASE}/findings${query.toString() ? `?${query.toString()}` : ''}`;
   const res = await fetch(url, {
@@ -328,7 +331,7 @@ export async function fetchFindings(params?: {
   const data = await res.json();
 
   // Normalize raw backend finding models into typed frontend Finding interface
-  const mapped: Finding[] = (data.findings || []).map((f: any) => ({
+  const mappedFindings: Finding[] = (data.findings || []).map((f: any) => ({
     id: f.finding_id || f.id,
     title: f.title,
     cloud: (f.cloud_provider || f.cloud || 'AWS').toUpperCase() as 'AWS' | 'Azure' | 'GCP',
@@ -338,21 +341,17 @@ export async function fetchFindings(params?: {
     riskScore: typeof f.risk_score === 'number' ? f.risk_score : (f.riskScore || 50),
     shapTopFeature: f.shap_top_feature || f.shapTopFeature || 'baseline_activity',
     shapImpact: typeof f.shap_impact === 'number' ? f.shap_impact : (f.shapImpact || 0.1),
-    complianceViolation: Array.isArray(f.compliance_violations)
-      ? f.compliance_violations
-      : (Array.isArray(f.complianceViolation) ? f.complianceViolation : []),
+    complianceViolation: Array.isArray(f.compliance_violations) ? f.compliance_violations : [],
     remediation: f.remediation_guidance || f.remediation || '',
     cliCommand: f.cli_remediation_command || f.cliCommand || '',
     terraform: f.terraform_remediation_snippet || f.terraform || '',
     status: f.status || 'OPEN',
-    detected_at: f.detected_at,
-    resolved_at: f.resolved_at,
   }));
 
   return {
-    total: data.total ?? mapped.length,
-    findings: mapped,
-    data_source: data.data_source,
+    total: typeof data.total === 'number' ? data.total : mappedFindings.length,
+    findings: mappedFindings,
+    data_source: data.data_source || 'database',
   };
 }
 
@@ -390,9 +389,88 @@ export async function explainFinding(findingId: string): Promise<SecurityExplana
   return res.json();
 }
 
+export async function updateFindingStatus(
+  findingId: string,
+  newStatus: string
+): Promise<{ finding_id: string; status: string; resolved_at?: string; message: string }> {
+  const res = await fetch(`${API_BASE}/findings/${encodeURIComponent(findingId)}/status`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: newStatus }),
+    signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+// ----------------------------------------------------------------------------
+// Recommendations API
+// ----------------------------------------------------------------------------
+export async function fetchPlaybooks(cloud?: string): Promise<any[]> {
+  const query = cloud && cloud !== 'ALL' ? `?cloud=${encodeURIComponent(cloud)}` : '';
+  const res = await fetch(`${API_BASE}/recommendations/playbooks${query}`, {
+    method: 'GET',
+    signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function fetchPlaybookById(playbookId: string): Promise<any> {
+  const res = await fetch(`${API_BASE}/recommendations/playbooks/${encodeURIComponent(playbookId)}`, {
+    method: 'GET',
+    signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
 // ----------------------------------------------------------------------------
 // Compliance API
 // ----------------------------------------------------------------------------
+export interface ComplianceEvaluationResponse {
+  total_controls: number;
+  results: ComplianceControlItem[];
+  summary: ComplianceSummary;
+}
+
+export async function fetchComplianceEvaluations(
+  framework?: string,
+  cloudProvider?: string
+): Promise<ComplianceEvaluationResponse> {
+  const query = new URLSearchParams();
+  if (framework && framework !== 'ALL') query.set('framework', framework);
+  if (cloudProvider && cloudProvider !== 'ALL') query.set('cloud_provider', cloudProvider);
+
+  const url = `${API_BASE}/compliance/evaluations${query.toString() ? `?${query.toString()}` : ''}`;
+  const res = await fetch(url, {
+    method: 'GET',
+    signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+
+  const mappedResults: ComplianceControlItem[] = (data.results || []).map((c: any) => ({
+    id: c.control_id,
+    name: c.control_name,
+    framework: c.framework,
+    cloud_provider: c.cloud_provider,
+    status: c.status || 'PASS',
+    evaluatedResources: typeof c.evaluated_resources === 'number' ? c.evaluated_resources : 0,
+    failedCount: typeof c.failed_resources === 'number' ? c.failed_resources : (c.failed_resource_ids?.length || 0),
+    severity: (c.severity || 'HIGH').toUpperCase() as 'HIGH' | 'MEDIUM' | 'LOW',
+    remediation: c.remediation_guidance || '',
+    cliCommand: c.cli_command,
+    terraform: c.terraform_snippet,
+  }));
+
+  return {
+    total_controls: data.total_controls || mappedResults.length,
+    results: mappedResults,
+    summary: data.summary,
+  };
+}
+
 export async function fetchComplianceSummary(framework?: string): Promise<ComplianceSummary> {
   const url = framework
     ? `${API_BASE}/compliance/summary?framework=${encodeURIComponent(framework)}`

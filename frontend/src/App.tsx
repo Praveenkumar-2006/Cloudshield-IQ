@@ -31,9 +31,9 @@ import {
   fetchIngestedEvents as apiFetchIngestedEvents,
   fetchFindings as apiFetchFindings,
   explainFinding as apiExplainFinding,
-  fetchComplianceSummary as apiFetchComplianceSummary,
+  updateFindingStatus as apiUpdateFindingStatus,
   fetchComplianceReport as apiFetchComplianceReport,
-  fetchComplianceControls as apiFetchComplianceControls,
+  fetchComplianceEvaluations as apiFetchComplianceEvaluations,
   fetchGlobalShapAttributions as apiFetchGlobalShapAttributions,
   explainEventWithShap as apiExplainEventWithShap,
   fetchModelInfo as apiFetchModelInfo,
@@ -74,11 +74,15 @@ interface HealthData {
 interface ComplianceControl {
   id: string;
   name: string;
-  framework: 'CIS AWS 1.4' | 'CIS Azure 2.0' | 'CIS GCP 1.3' | 'NIST 800-53' | 'ISO 27001' | 'PCI-DSS 4.0';
+  framework: string;
   status: 'PASS' | 'FAIL' | 'PARTIAL';
   evaluatedResources: number;
   failedCount: number;
   severity: 'HIGH' | 'MEDIUM' | 'LOW';
+  remediation?: string;
+  cliCommand?: string;
+  terraform?: string;
+  evidence?: string[];
 }
 
 interface SecOpsMessage {
@@ -90,278 +94,13 @@ interface SecOpsMessage {
   timestamp: string;
 }
 
-const mockFindings: Finding[] = [
-  {
-    id: 'FND-AWS-1049',
-    title: 'IAM Root User Account Has Active Access Keys Without MFA Enforcement',
-    cloud: 'AWS',
-    resourceId: 'arn:aws:iam::123456789012:root',
-    severity: 'CRITICAL',
-    category: 'IAM',
-    riskScore: 96.4,
-    shapTopFeature: 'iam_root_access_key_active',
-    shapImpact: 0.42,
-    complianceViolation: ['CIS AWS 1.1', 'NIST AC-2(1)', 'ISO 27001 A.9.2.1'],
-    remediation: 'Delete active root access keys immediately and enforce hardware token multi-factor authentication (MFA).',
-    cliCommand: 'aws iam delete-access-key --access-key-id AKIAIOSFODNN7EXAMPLE',
-    terraform: `resource "aws_iam_account_password_policy" "strict" {
-  require_symbols        = true
-  require_numbers        = true
-  minimum_password_length = 16
-  hard_expiry            = false
-}`,
-    attackVector: 'Unprotected root API credentials allow unrestricted full cloud account takeover, billing destruction, and resource tampering without MFA barriers.',
-    pythonSnippet: `import boto3
-
-iam = boto3.client('iam')
-# Revoke root credentials and enforce MFA policies
-iam.delete_access_key(UserName='root', AccessKeyId='AKIAIOSFODNN7EXAMPLE')
-print("[SECOPS] Active root credentials deleted successfully.")`
-  },
-  {
-    id: 'FND-AWS-2081',
-    title: 'S3 Bucket with Sensitive Financial Artifacts Has Public Read/List ACLs Enabled',
-    cloud: 'AWS',
-    resourceId: 'arn:aws:s3:::cloudshield-prod-analytics-exports',
-    severity: 'CRITICAL',
-    category: 'Storage',
-    riskScore: 94.8,
-    shapTopFeature: 's3_public_read_access_granted',
-    shapImpact: 0.38,
-    complianceViolation: ['CIS AWS 2.1.1', 'PCI-DSS 3.4', 'NIST SC-28'],
-    remediation: 'Enable S3 Public Access Block at account and bucket level and restrict bucket policy to IAM roles.',
-    cliCommand: 'aws s3api put-public-access-block --bucket cloudshield-prod-analytics-exports --public-access-block-configuration "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true"',
-    terraform: `resource "aws_s3_bucket_public_access_block" "block_all" {
-  bucket                  = aws_s3_bucket.analytics.id
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
-}`,
-    attackVector: 'Anonymous internet users can enumerate all bucket objects, exfiltrating financial reports and PII without authorization.',
-    pythonSnippet: `import boto3
-
-s3 = boto3.client('s3')
-s3.put_public_access_block(
-    Bucket='cloudshield-prod-analytics-exports',
-    PublicAccessBlockConfiguration={
-        'BlockPublicAcls': True,
-        'IgnorePublicAcls': True,
-        'BlockPublicPolicy': True,
-        'RestrictPublicBuckets': True
-    }
-)
-print("[SECOPS] S3 Public Access Block enforced.")`
-  },
-  {
-    id: 'FND-AZR-3012',
-    title: 'Security Group Ingress Allows Unrestricted SSH (Port 22) From 0.0.0.0/0',
-    cloud: 'Azure',
-    resourceId: '/subscriptions/sub-01/resourceGroups/rg-prod/providers/Microsoft.Network/networkSecurityGroups/nsg-core',
-    severity: 'HIGH',
-    category: 'Network',
-    riskScore: 88.2,
-    shapTopFeature: 'ingress_port_22_open_to_any',
-    shapImpact: 0.31,
-    complianceViolation: ['CIS Azure 5.1', 'NIST AC-17', 'ISO 27001 A.13.1.1'],
-    remediation: 'Remove public CIDR 0.0.0.0/0 ingress rule on port 22 and restrict administration to Azure Bastion or corporate VPN subnet.',
-    cliCommand: 'az network nsg rule delete -g rg-prod --nsg-name nsg-core -n AllowSSHAny',
-    terraform: `resource "azurerm_network_security_rule" "deny_ssh_pub" {
-  name                        = "DenyInternetSSH"
-  priority                    = 100
-  direction                   = "Inbound"
-  access                      = "Deny"
-  protocol                    = "Tcp"
-  source_port_range           = "*"
-  destination_port_range      = "22"
-  source_address_prefix       = "Internet"
-  destination_address_prefix  = "*"
-  resource_group_name         = "rg-prod"
-  network_security_group_name = "nsg-core"
-}`,
-    attackVector: 'Exposed SSH ports are susceptible to brute-force credential stuffing, zero-day daemon exploitation, and perimeter pivoting.',
-    pythonSnippet: `from azure.identity import DefaultAzureCredential
-from azure.mgmt.network import NetworkManagementClient
-
-client = NetworkManagementClient(DefaultAzureCredential(), 'sub-01')
-client.security_rules.begin_delete('rg-prod', 'nsg-core', 'AllowSSHAny').wait()
-print("[SECOPS] Inbound port 22 open rule revoked.")`
-  },
-  {
-    id: 'FND-GCP-4099',
-    title: 'Compute Engine Disk Volumes Not Encrypted with Customer Managed Keys (CMEK)',
-    cloud: 'GCP',
-    resourceId: 'projects/cloudshield-sec-gcp/zones/us-central1-a/disks/db-replica-vol01',
-    severity: 'MEDIUM',
-    category: 'Encryption',
-    riskScore: 68.5,
-    shapTopFeature: 'cmek_disk_encryption_absent',
-    shapImpact: 0.19,
-    complianceViolation: ['CIS GCP 4.1', 'ISO 27001 A.10.1.1'],
-    remediation: 'Configure Google Cloud KMS key ring and associate customer-managed key with persistent disk volumes.',
-    cliCommand: 'gcloud compute disks create db-replica-vol01 --kms-key projects/cloudshield-sec-gcp/locations/global/keyRings/kr/cryptoKeys/kms-disk',
-    terraform: `resource "google_compute_disk" "encrypted_disk" {
-  name = "db-replica-vol01"
-  zone = "us-central1-a"
-  kms_key_self_link = google_kms_crypto_key.key.id
-}`,
-    attackVector: 'Default Google-managed keys do not provide cryptographic separation of duties or user-controlled key rotation schedules.',
-    pythonSnippet: `from google.cloud import kms_v1
-
-client = kms_v1.KeyManagementServiceClient()
-parent = client.key_ring_path('cloudshield-sec-gcp', 'global', 'kr')
-key = client.create_crypto_key(
-    parent=parent,
-    crypto_key_id='kms-disk',
-    crypto_key={'purpose': kms_v1.CryptoKey.CryptoKeyPurpose.ENCRYPT_DECRYPT}
-)
-print(f"[SECOPS] CMEK key initialized: {key.name}")`
-  },
-  {
-    id: 'FND-AWS-5034',
-    title: 'IAM Policy Grants Wildcard Action ("*") on All CloudWatch Log Groups',
-    cloud: 'AWS',
-    resourceId: 'arn:aws:iam::123456789012:policy/DevLogWriter',
-    severity: 'LOW',
-    category: 'IAM',
-    riskScore: 42.1,
-    shapTopFeature: 'iam_wildcard_action_logs',
-    shapImpact: 0.09,
-    complianceViolation: ['CIS AWS 1.16', 'NIST AC-6'],
-    remediation: 'Scope down IAM policy actions to logs:PutLogEvents and logs:CreateLogStream with specific log group ARN targets.',
-    cliCommand: 'aws iam create-policy-version --policy-arn arn:aws:iam::123456789012:policy/DevLogWriter --policy-document file://scoped-policy.json --set-as-default',
-    terraform: `data "aws_iam_policy_document" "scoped_logs" {
-  statement {
-    actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
-    resources = ["arn:aws:logs:*:*:log-group:/aws/lambda/*"]
-  }
-}`,
-    attackVector: 'Broad wildcard permissions allow compromised compute workloads to delete or tamper with audit trail logs.',
-    pythonSnippet: `import boto3, json
-
-iam = boto3.client('iam')
-policy_doc = {
-    "Version": "2012-10-17",
-    "Statement": [{"Effect": "Allow", "Action": ["logs:CreateLogStream", "logs:PutLogEvents"], "Resource": "arn:aws:logs:*:*:log-group:/aws/lambda/*"}]
-}
-iam.create_policy_version(PolicyArn='arn:aws:iam::123456789012:policy/DevLogWriter', PolicyDocument=json.dumps(policy_doc), SetAsDefault=True)
-print("[SECOPS] Wildcard policy scoped to minimum privilege.")`
-  },
-  {
-    id: 'FND-AZR-3045',
-    title: 'Storage Account Public Blob Container Access Enabled Allowing Anonymous Read',
-    cloud: 'Azure',
-    resourceId: '/subscriptions/sub-01/resourceGroups/rg-prod/providers/Microsoft.Storage/storageAccounts/stdataanalytics',
-    severity: 'CRITICAL',
-    category: 'Storage',
-    riskScore: 93.4,
-    shapTopFeature: 'azure_storage_allow_blob_public_access',
-    shapImpact: 0.36,
-    complianceViolation: ['CIS Azure 3.5', 'NIST SC-28', 'PCI-DSS 3.4'],
-    remediation: 'Disable AllowBlobPublicAccess on the storage account and configure private endpoint connections.',
-    cliCommand: 'az storage account update --name stdataanalytics --resource-group rg-prod --allow-blob-public-access false',
-    terraform: `resource "azurerm_storage_account" "secure_storage" {
-  name                     = "stdataanalytics"
-  resource_group_name      = "rg-prod"
-  location                 = "eastus"
-  account_tier             = "Standard"
-  account_replication_type = "GRS"
-  allow_nested_items_to_be_public = false
-}`,
-    attackVector: 'Anonymous internet users can probe blob storage endpoints directly to harvest intellectual property or database dumps.',
-    pythonSnippet: `from azure.identity import DefaultAzureCredential
-from azure.mgmt.storage import StorageManagementClient
-
-client = StorageManagementClient(DefaultAzureCredential(), 'sub-01')
-client.storage_accounts.update('rg-prod', 'stdataanalytics', {'allow_blob_public_access': False})
-print("[SECOPS] Storage account blob public access revoked.")`
-  },
-  {
-    id: 'FND-GCP-4011',
-    title: 'Service Account User-Managed Key Created Without Mandatory Rotation Schedule',
-    cloud: 'GCP',
-    resourceId: 'projects/cloudshield-sec-gcp/serviceAccounts/data-exporter@cloudshield-sec-gcp.iam.gserviceaccount.com',
-    severity: 'HIGH',
-    category: 'IAM',
-    riskScore: 86.7,
-    shapTopFeature: 'gcp_iam_service_account_key_created',
-    shapImpact: 0.28,
-    complianceViolation: ['CIS GCP 1.4', 'ISO 27001 A.9.4.3'],
-    remediation: 'Delete user-managed service account keys and transition workloads to Workload Identity Federation.',
-    cliCommand: 'gcloud iam service-accounts keys delete KEY_ID --iam-account data-exporter@cloudshield-sec-gcp.iam.gserviceaccount.com',
-    terraform: `resource "google_iam_workload_identity_pool" "pool" {
-  workload_identity_pool_id = "prod-pool"
-}`,
-    attackVector: 'Unrotated service account private keys committed to repositories or build logs provide permanent backdoors into GCP projects.',
-    pythonSnippet: `from google.cloud import iam_admin_v1
-
-client = iam_admin_v1.IAMClient()
-client.delete_service_account_key(name='projects/cloudshield-sec-gcp/serviceAccounts/data-exporter@cloudshield-sec-gcp.iam.gserviceaccount.com/keys/KEY_ID')
-print("[SECOPS] User-managed service account key deleted.")`
-  },
-  {
-    id: 'FND-AWS-1090',
-    title: 'CloudTrail Multi-Region Audit Trail Disabled or Deletion Attempted',
-    cloud: 'AWS',
-    resourceId: 'arn:aws:cloudtrail:us-east-1:123456789012:trail/security-audit-trail',
-    severity: 'CRITICAL',
-    category: 'Logging',
-    riskScore: 98.5,
-    shapTopFeature: 'cloudtrail_logging_disabled',
-    shapImpact: 0.48,
-    complianceViolation: ['CIS AWS 3.1', 'NIST AU-2', 'SOC2 CC7.2'],
-    remediation: 'Re-enable CloudTrail immediately and attach an SCP forbidding DeleteTrail and StopLogging actions.',
-    cliCommand: 'aws cloudtrail start-logging --name security-audit-trail',
-    terraform: `resource "aws_cloudtrail" "core" {
-  name                          = "security-audit-trail"
-  s3_bucket_name                = "audit-logs-bucket"
-  include_global_service_events = true
-  is_multi_region_trail         = true
-  enable_logging                = true
-}`,
-    attackVector: 'Threat actors disable audit logging as defense evasion prior to executing data theft and cryptomining deployment.',
-    pythonSnippet: `import boto3
-
-ct = boto3.client('cloudtrail')
-ct.start_logging(Name='security-audit-trail')
-print("[SECOPS] Multi-region CloudTrail audit logging re-enabled.")`
-  }
-];
-
-const mockComplianceControls: ComplianceControl[] = [
-  { id: 'CIS-AWS-1.1', name: 'Avoid the use of the root account and enforce MFA', framework: 'CIS AWS 1.4', status: 'FAIL', evaluatedResources: 1, failedCount: 1, severity: 'HIGH' },
-  { id: 'CIS-AWS-2.1.1', name: 'Ensure S3 Bucket Policy blocks public read access', framework: 'CIS AWS 1.4', status: 'FAIL', evaluatedResources: 34, failedCount: 3, severity: 'HIGH' },
-  { id: 'CIS-AWS-3.1', name: 'Ensure CloudTrail is enabled across all multi-region zones', framework: 'CIS AWS 1.4', status: 'PASS', evaluatedResources: 4, failedCount: 0, severity: 'HIGH' },
-  { id: 'CIS-AZR-5.1', name: 'Ensure that SSH access is restricted from the internet', framework: 'CIS Azure 2.0', status: 'FAIL', evaluatedResources: 18, failedCount: 2, severity: 'HIGH' },
-  { id: 'CIS-AZR-3.2', name: 'Ensure storage account default network access is set to Deny', framework: 'CIS Azure 2.0', status: 'PARTIAL', evaluatedResources: 22, failedCount: 4, severity: 'MEDIUM' },
-  { id: 'NIST-AC-2', name: 'Account Management and Principle of Least Privilege', framework: 'NIST 800-53', status: 'FAIL', evaluatedResources: 86, failedCount: 14, severity: 'HIGH' },
-  { id: 'NIST-SC-28', name: 'Protection of Information at Rest (Cryptographic Keys)', framework: 'NIST 800-53', status: 'PARTIAL', evaluatedResources: 64, failedCount: 8, severity: 'MEDIUM' },
-  { id: 'ISO-A.9.4.2', name: 'Secure Log-on Procedures and Multi-Factor Authentication', framework: 'ISO 27001', status: 'FAIL', evaluatedResources: 92, failedCount: 11, severity: 'HIGH' },
-  { id: 'PCI-3.4', name: 'Render primary account numbers (PAN) unreadable anywhere stored', framework: 'PCI-DSS 4.0', status: 'PASS', evaluatedResources: 12, failedCount: 0, severity: 'HIGH' }
-];
-
-const defaultGlobalShapAttributions = {
-  model_version: 'supervised-xgboost-v1',
-  base_value: 48.5,
-  sample_count_analyzed: 20000,
-  top_global_features: [
-    { feature_name: 'actor_type_root', display_name: 'Root Cloud Account Usage', domain: 'IAM', mean_abs_shap: 4.12, relative_percentage: 34.5, description: 'Privileged root cloud account invoked without scoped delegation' },
-    { feature_name: 'mfa_used', display_name: 'Missing Multi-Factor Auth', domain: 'Authentication', mean_abs_shap: 3.02, relative_percentage: 25.3, description: 'Multi-factor authentication status during session creation' },
-    { feature_name: 'is_public_ip', display_name: 'Public Internet Ingress', domain: 'Network', mean_abs_shap: 2.15, relative_percentage: 18.0, description: 'Connection initiated from public non-RFC1918 IP address' },
-    { feature_name: 'action_StopLogging', display_name: 'Audit Trail Interruption', domain: 'Logging', mean_abs_shap: 1.45, relative_percentage: 12.1, description: 'Deactivation of continuous cloud security event logging' },
-    { feature_name: 'action_PutBucketAcl', display_name: 'Storage ACL Modification', domain: 'Storage', mean_abs_shap: 0.72, relative_percentage: 6.0, description: 'Modifying object or bucket access control list permissions' },
-    { feature_name: 'action_ScheduleKeyDeletion', display_name: 'KMS Key Destruction', domain: 'Encryption', mean_abs_shap: 0.49, relative_percentage: 4.1, description: 'Cryptographic key scheduled for permanent deletion' }
-  ],
-  domain_distribution: { 'IAM': 38.2, 'Authentication': 26.5, 'Network': 19.1, 'Logging': 10.4, 'Storage': 5.8 }
-};
-
 export function App() {
   const [activeTab, setActiveTab] = useState<'overview' | 'findings' | 'compliance' | 'ml-engine' | 'ingestion' | 'architecture'>('overview');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  const [findings, setFindings] = useState<Finding[]>(mockFindings);
-  const [selectedFinding, setSelectedFinding] = useState<Finding | null>(mockFindings[0]);
-  const [findingsSource, setFindingsSource] = useState<'database' | 'ingested_memory' | 'offline_fallback' | 'empty'>('offline_fallback');
+  const [findings, setFindings] = useState<Finding[]>([]);
+  const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
+  const [findingsSource, setFindingsSource] = useState<'database' | 'ingested_memory' | 'offline_fallback' | 'empty'>('empty');
   const [isLoadingFindings, setIsLoadingFindings] = useState(false);
   const [selectedCloudFilter, setSelectedCloudFilter] = useState<'ALL' | 'AWS' | 'Azure' | 'GCP'>('ALL');
   const [selectedSeverityFilter, setSelectedSeverityFilter] = useState<'ALL' | 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW'>('ALL');
@@ -375,8 +114,10 @@ export function App() {
 
   // Tactical Toast Notifications
   const [toasts, setToasts] = useState<Array<{ id: string; message: string; type?: 'info' | 'success' | 'warn' }>>([]);
+  const toastSeqRef = useRef(0);
   const showToast = (message: string, type: 'info' | 'success' | 'warn' = 'info') => {
-    const id = Date.now().toString() + Math.random().toString().slice(2, 5);
+    toastSeqRef.current += 1;
+    const id = `${Date.now()}-${toastSeqRef.current}`;
     setToasts(prev => [...prev, { id, message, type }]);
     setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id));
@@ -389,23 +130,14 @@ export function App() {
 
   // Finding Remediation & Lifecycle Triage states
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>('ALL');
-  const [findingStatuses, setFindingStatuses] = useState<Record<string, 'OPEN' | 'IN_PROGRESS' | 'RESOLVED'>>({
-    'FND-AWS-1049': 'OPEN',
-    'FND-AWS-2081': 'OPEN',
-    'FND-AZR-3012': 'OPEN',
-    'FND-GCP-4099': 'OPEN',
-    'FND-AWS-5034': 'OPEN',
-    'FND-AZR-3045': 'OPEN',
-    'FND-GCP-4011': 'OPEN',
-    'FND-AWS-1090': 'OPEN'
-  });
+  const [findingStatuses, setFindingStatuses] = useState<Record<string, 'OPEN' | 'IN_PROGRESS' | 'RESOLVED'>>({});
 
   // Compliance States
   const [complianceStatusFilter, setComplianceStatusFilter] = useState<'ALL' | 'PASS' | 'FAIL' | 'PARTIAL'>('ALL');
   const [complianceFrameworkFilter, setComplianceFrameworkFilter] = useState<string>('ALL');
-  const [complianceControls, setComplianceControls] = useState<ComplianceControl[]>(mockComplianceControls);
+  const [complianceControls, setComplianceControls] = useState<ComplianceControl[]>([]);
   const [complianceSummary, setComplianceSummary] = useState<any>(null);
-  const [complianceSource, setComplianceSource] = useState<'database' | 'evaluated' | 'offline_fallback'>('offline_fallback');
+  const [complianceSource, setComplianceSource] = useState<'database' | 'evaluated' | 'offline_fallback' | 'no_data'>('no_data');
   const [isLoadingCompliance, setIsLoadingCompliance] = useState(false);
 
   // SecOps Remediation Console state
@@ -436,14 +168,8 @@ export function App() {
   const [rawEvents, setRawEvents] = useState<TelemetryEvent[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Telemetry stream (live polled from backend)
-  const [telemetryLogs, setTelemetryLogs] = useState<Array<{ id: string; time: string; cloud: string; action: string; actor?: string; resource?: string; status: 'WARN' | 'CRIT' | 'INFO' }>>([
-    { id: 'TL-9912', time: '14:22:12', cloud: 'AWS', action: 'iam:CreateAccessKey (Root)', status: 'CRIT' },
-    { id: 'TL-9913', time: '14:22:18', cloud: 'AZURE', action: 'nsg:InboundRuleModified (Port 22)', status: 'WARN' },
-    { id: 'TL-9914', time: '14:22:25', cloud: 'GCP', action: 'kms:KeyRingAuditChecked', status: 'INFO' },
-    { id: 'TL-9915', time: '14:22:31', cloud: 'AWS', action: 's3:PutBucketAcl (Public)', status: 'CRIT' },
-    { id: 'TL-9916', time: '14:22:44', cloud: 'AWS', action: 'cloudtrail:LookupEvents', status: 'INFO' },
-  ]);
+  // Telemetry stream (polled from backend)
+  const [telemetryLogs, setTelemetryLogs] = useState<Array<{ id: string; time: string; cloud: string; action: string; actor?: string; resource?: string; status: 'WARN' | 'CRIT' | 'INFO' }>>([]);
 
   // Backend connection state
   const [backendHealth, setBackendHealth] = useState<HealthData>({
@@ -526,7 +252,7 @@ export function App() {
       description: string;
     }>;
     domain_distribution: Record<string, number>;
-  } | null>(defaultGlobalShapAttributions);
+  } | null>(null);
 
   const [selectedEventExplanation, setSelectedEventExplanation] = useState<{
     event_id?: string;
@@ -558,40 +284,20 @@ export function App() {
   // Grounded LLM Explanation Layer State
   const [selectedFindingExplanation, setSelectedFindingExplanation] = useState<SecurityExplanation | null>(null);
   const [isLoadingExplanation, setIsLoadingExplanation] = useState(false);
+  const [explanationError, setExplanationError] = useState<string | null>(null);
 
   const fetchExplanationForFinding = async (finding: Finding) => {
     setIsLoadingExplanation(true);
+    setExplanationError(null);
     try {
       const data = await apiExplainFinding(finding.id);
       setSelectedFindingExplanation(data);
-      setIsLoadingExplanation(false);
-      return;
     } catch {
-      // Graceful offline fallback
+      setSelectedFindingExplanation(null);
+      setExplanationError('Backend explanation service unavailable for this finding.');
+    } finally {
+      setIsLoadingExplanation(false);
     }
-
-    const score = finding.riskScore;
-    const isAnom = score >= 85.0;
-    const fallback: SecurityExplanation = {
-      finding_id: finding.id,
-      risk: finding.severity,
-      what_happened: `CloudShield IQ detected a verified ${finding.severity} exposure on ${finding.cloud} resource '${finding.resourceId}': ${finding.title}.`,
-      why_it_matters: `Calibrated risk score of ${score.toFixed(1)}/100 indicates critical exposure to unauthorized manipulation or data leakage. TreeSHAP attribution identifies '${finding.shapTopFeature}' (+${Math.round(finding.shapImpact * 100)}% risk weight) as dominant contributor.`,
-      evidence: [
-        `Identity activity lacked verified multi-factor authentication (MFA).`,
-        `TreeSHAP identified primary risk contributor: '${finding.shapTopFeature}'.`,
-        `Verified control failure flagged on target cloud provider ${finding.cloud}.`,
-        isAnom ? `Isolation Forest ensemble classified behavior as anomalous outlier.` : `Deterministic policy evaluation failed against regulatory baseline.`
-      ],
-      compliance_impact: `Non-compliant with codified standards: ${finding.complianceViolation.join(', ')}. Deterministic compliance verification failed against active regulatory baselines.`,
-      recommended_action: `${finding.remediation} Immediate CLI command: \`${finding.cliCommand}\`.`,
-      grounding_score: 1.0,
-      is_llm_generated: false,
-      generated_at: new Date().toISOString(),
-      model_used: 'deterministic-grounded-engine'
-    };
-    setSelectedFindingExplanation(fallback);
-    setIsLoadingExplanation(false);
   };
 
   useEffect(() => {
@@ -614,127 +320,83 @@ export function App() {
       const data = await apiFetchGlobalShapAttributions(6);
       setGlobalShapAttributions(data);
     } catch {
-      setGlobalShapAttributions(defaultGlobalShapAttributions);
+      setGlobalShapAttributions(null);
     }
   };
 
   const explainEventWithShap = async (eventPayload?: any) => {
+    const event = eventPayload || (rawEvents.length > 0 ? rawEvents[0] : null);
+    if (!event) {
+      showToast('No telemetry event available for TreeSHAP analysis. Ingest telemetry first.', 'warn');
+      return;
+    }
     setIsExplainingEvent(true);
-    const event = eventPayload || (rawEvents.length > 0 ? rawEvents[0] : {
-      event_id: 'evt-fnd-root-01',
-      timestamp: new Date().toISOString(),
-      cloud_provider: 'aws',
-      resource_type: 'iam:Role',
-      action: 'DeleteRole',
-      actor_type: 'root',
-      actor_name: 'root',
-      source_ip: '198.51.100.24',
-      mfa_used: false,
-      outcome: 'Failure',
-      session_duration_s: 0
-    });
-
-    const fallbackExplanation = {
-      event_id: event.event_id || 'evt-fnd-root-01',
-      base_value: 48.5,
-      predicted_risk_score: 92.4,
-      top_risk_drivers: [
-        { feature_name: 'actor_type_root', display_name: 'Root Account Usage', domain: 'IAM', shap_value: 24.5, feature_value: 1.0, direction: 'risk_enhancer', description: 'Privileged root account used for destructive operations' },
-        { feature_name: 'mfa_used', display_name: 'Missing MFA Verification', domain: 'Authentication', shap_value: 12.8, feature_value: 0.0, direction: 'risk_enhancer', description: 'Action executed without hardware or virtual MFA' },
-        { feature_name: 'action_DeleteRole', display_name: 'IAM Role Deletion', domain: 'IAM', shap_value: 8.6, feature_value: 1.0, direction: 'risk_enhancer', description: 'Critical IAM role destruction detected' },
-        { feature_name: 'is_public_ip', display_name: 'Untrusted Public Ingress', domain: 'Network', shap_value: 4.2, feature_value: 1.0, direction: 'risk_enhancer', description: 'Origin IP 198.51.100.24 outside corporate VPN perimeter' }
-      ],
-      top_risk_mitigators: [
-        { feature_name: 'session_duration_s', display_name: 'Zero Session Duration', domain: 'Authentication', shap_value: -6.2, feature_value: 0.0, direction: 'risk_mitigator', description: 'Immediate termination prevented sustained privilege abuse' }
-      ],
-      all_attributions: {
-        'actor_type_root': 24.5,
-        'mfa_used': 12.8,
-        'action_DeleteRole': 8.6,
-        'is_public_ip': 4.2,
-        'session_duration_s': -6.2
-      }
-    };
-
     try {
       const data = await apiExplainEventWithShap(event, 4);
       setSelectedEventExplanation(data);
-    } catch {
-      setSelectedEventExplanation(fallbackExplanation);
+    } catch (err: any) {
+      setSelectedEventExplanation(null);
+      showToast(`TreeSHAP calculation failed: ${err.message || 'Service unavailable'}`, 'warn');
     } finally {
       setIsExplainingEvent(false);
     }
   };
 
   const runLiveSupervisedScan = async () => {
+    if (rawEvents.length === 0) {
+      showToast('Ingest telemetry before running ML inference.', 'warn');
+      return;
+    }
     setIsSupervisedInferring(true);
     try {
-      const eventsToScore = rawEvents.length > 0
-        ? rawEvents.slice(0, 5).map(e => ({
-            timestamp: e.timestamp,
-            cloud_provider: e.cloud_provider,
-            resource_type: e.resource_type,
-            action: e.raw_action || e.canonical_action,
-            actor_type: e.actor_type,
-            actor_name: e.actor_name,
-            mfa_used: e.mfa_used,
-            outcome: e.outcome,
-          }))
-        : [
-            { timestamp: new Date().toISOString(), cloud_provider: 'aws', resource_type: 'iam:Role', action: 'DeleteRole', actor_type: 'root', actor_name: 'root', source_ip: '198.51.100.24', mfa_used: false, outcome: 'Failure', session_duration_s: 0 },
-            { timestamp: new Date().toISOString(), cloud_provider: 'azure', resource_type: 'Microsoft.Storage/storageAccounts', action: 'PutBucketAcl', actor_type: 'user', actor_name: 'admin_bob', source_ip: '203.0.113.88', mfa_used: false, outcome: 'Success', session_duration_s: 360 },
-            { timestamp: new Date().toISOString(), cloud_provider: 'aws', resource_type: 'ec2:Instance', action: 'DescribeInstances', actor_type: 'user', actor_name: 'developer_alice', source_ip: '10.0.1.5', mfa_used: true, outcome: 'Success', session_duration_s: 1800 }
-          ];
+      const eventsToScore = rawEvents.slice(0, 10).map(e => ({
+        event_id: e.event_id,
+        timestamp: e.timestamp,
+        cloud_provider: e.cloud_provider,
+        resource_type: e.resource_type,
+        action: e.raw_action || e.canonical_action,
+        actor_type: e.actor_type,
+        actor_name: e.actor_name,
+        source_ip: e.source_ip,
+        mfa_used: e.mfa_used,
+        outcome: e.outcome,
+      }));
 
       const data = await apiTriggerLiveRiskScan(eventsToScore);
       setSupervisedRiskResult(data);
-    } catch {
-      setSupervisedRiskResult({
-        total_events: 3,
-        severity_counts: { critical: 1, high: 1, low: 1, medium: 0 },
-        mean_risk_score: 62.4,
-        predictions: [
-          { event_id: 'evt-sup-101', predicted_severity: 'critical', confidence: 0.94, predicted_risk_score: 91.2, model_version: 'supervised-xgboost-v1', severity_probabilities: { low: 0.01, medium: 0.02, high: 0.03, critical: 0.94 } },
-          { event_id: 'evt-sup-102', predicted_severity: 'high', confidence: 0.82, predicted_risk_score: 74.5, model_version: 'supervised-xgboost-v1', severity_probabilities: { low: 0.04, medium: 0.06, high: 0.82, critical: 0.08 } },
-          { event_id: 'evt-sup-103', predicted_severity: 'low', confidence: 0.91, predicted_risk_score: 21.5, model_version: 'supervised-xgboost-v1', severity_probabilities: { low: 0.91, medium: 0.06, high: 0.02, critical: 0.01 } }
-        ]
-      });
+    } catch (err: any) {
+      setSupervisedRiskResult(null);
+      showToast(`Supervised scan failed: ${err.message || 'Service unavailable'}`, 'warn');
     } finally {
       setIsSupervisedInferring(false);
     }
   };
 
   const runLiveMlInference = async () => {
+    if (rawEvents.length === 0) {
+      showToast('Ingest telemetry before running ML inference.', 'warn');
+      return;
+    }
     setIsInferring(true);
     try {
-      const eventsToDetect = rawEvents.length > 0
-        ? rawEvents.slice(0, 10).map(e => ({
-            timestamp: e.timestamp,
-            cloud_provider: e.cloud_provider,
-            resource_type: e.resource_type,
-            action: e.raw_action || e.canonical_action,
-            actor_type: e.actor_type,
-            actor_name: e.actor_name,
-            mfa_used: e.mfa_used,
-            outcome: e.outcome,
-          }))
-        : [
-            { timestamp: new Date().toISOString(), cloud_provider: 'aws', resource_type: 'iam:Role', action: 'DeleteRole', actor_type: 'root', actor_name: 'root', source_ip: '198.51.100.24', mfa_used: false, outcome: 'Failure', session_duration_s: 0 },
-            { timestamp: new Date().toISOString(), cloud_provider: 'aws', resource_type: 'ec2:Instance', action: 'DescribeInstances', actor_type: 'user', actor_name: 'developer_alice', source_ip: '10.0.1.5', mfa_used: true, outcome: 'Success', session_duration_s: 1800 }
-          ];
+      const eventsToDetect = rawEvents.slice(0, 10).map(e => ({
+        event_id: e.event_id,
+        timestamp: e.timestamp,
+        cloud_provider: e.cloud_provider,
+        resource_type: e.resource_type,
+        action: e.raw_action || e.canonical_action,
+        actor_type: e.actor_type,
+        actor_name: e.actor_name,
+        source_ip: e.source_ip,
+        mfa_used: e.mfa_used,
+        outcome: e.outcome,
+      }));
 
       const data = await apiTriggerAnomalyDetection(eventsToDetect);
       setMlInferenceResult(data);
-    } catch {
-      setMlInferenceResult({
-        total_events: 2,
-        anomalies_detected: 1,
-        anomaly_rate: 0.5,
-        predictions: [
-          { event_id: 'evt-iforest-1', is_anomaly: true, anomaly_score: 0.89, raw_score: -0.21, feature_impacts: { privilege_escalation: 0.44, off_hours_activity: 0.31 }, evaluated_at: new Date().toISOString() },
-          { event_id: 'evt-iforest-2', is_anomaly: false, anomaly_score: 0.14, raw_score: 0.18, feature_impacts: { routine_read: 0.05 }, evaluated_at: new Date().toISOString() }
-        ]
-      });
+    } catch (err: any) {
+      setMlInferenceResult(null);
+      showToast(`Anomaly detection failed: ${err.message || 'Service unavailable'}`, 'warn');
     } finally {
       setIsInferring(false);
     }
@@ -744,47 +406,64 @@ export function App() {
   const loadFindings = async () => {
     setIsLoadingFindings(true);
     try {
-      const data = await apiFetchFindings();
+      const data = await apiFetchFindings({ includeFallback: false });
       if (data.findings && data.findings.length > 0) {
         setFindings(data.findings);
         setFindingsSource((data.data_source as any) || 'database');
+        const statusMap: Record<string, 'OPEN' | 'IN_PROGRESS' | 'RESOLVED'> = {};
+        data.findings.forEach(f => {
+          statusMap[f.id] = (f.status as any) || 'OPEN';
+        });
+        setFindingStatuses(statusMap);
         setSelectedFinding(prev => {
           if (prev && data.findings.some(f => f.id === prev.id)) return prev;
           return data.findings[0];
         });
-      } else if (data.data_source === 'offline_fallback') {
-        setFindings(mockFindings);
-        setFindingsSource('offline_fallback');
-        setSelectedFinding(prev => prev || mockFindings[0]);
       } else {
         setFindings([]);
-        setFindingsSource('empty');
+        setFindingsSource(data.data_source === 'offline_fallback' ? 'offline_fallback' : 'empty');
         setSelectedFinding(null);
       }
     } catch {
-      setFindings(mockFindings);
-      setFindingsSource('offline_fallback');
-      setSelectedFinding(prev => prev || mockFindings[0]);
+      setFindings([]);
+      setFindingsSource('empty');
+      setSelectedFinding(null);
     } finally {
       setIsLoadingFindings(false);
+    }
+  };
+
+  const handleFindingStatusUpdate = async (findingId: string, newStatus: 'OPEN' | 'IN_PROGRESS' | 'RESOLVED') => {
+    try {
+      const res = await apiUpdateFindingStatus(findingId, newStatus);
+      setFindingStatuses(prev => ({ ...prev, [findingId]: res.status as any }));
+      setFindings(prev => prev.map(f => f.id === findingId ? { ...f, status: res.status as any } : f));
+      if (selectedFinding && selectedFinding.id === findingId) {
+        setSelectedFinding(prev => prev ? { ...prev, status: res.status as any } : null);
+      }
+      showToast(`${findingId} status updated to ${newStatus.replace('_', ' ')}`, 'success');
+    } catch (err: any) {
+      showToast(`Failed to update status: ${err.message || 'Error'}`, 'warn');
     }
   };
 
   const loadCompliance = async () => {
     setIsLoadingCompliance(true);
     try {
-      const [controls, summary] = await Promise.all([
-        apiFetchComplianceControls(),
-        apiFetchComplianceSummary(),
-      ]);
-      if (controls && controls.length > 0) {
-        setComplianceControls(controls as any);
+      const evalData = await apiFetchComplianceEvaluations();
+      if (evalData && evalData.results && evalData.results.length > 0) {
+        setComplianceControls(evalData.results as any);
+        setComplianceSummary(evalData.summary);
+        setComplianceSource('evaluated');
+      } else {
+        setComplianceControls([]);
+        setComplianceSummary(evalData?.summary || null);
+        setComplianceSource('no_data');
       }
-      setComplianceSummary(summary);
-      setComplianceSource('evaluated');
     } catch {
-      setComplianceControls(mockComplianceControls);
-      setComplianceSource('offline_fallback');
+      setComplianceControls([]);
+      setComplianceSummary(null);
+      setComplianceSource('no_data');
     } finally {
       setIsLoadingCompliance(false);
     }
@@ -793,9 +472,10 @@ export function App() {
   const loadTelemetry = async () => {
     try {
       const data = await apiFetchIngestedEvents(30);
-      setRawEvents(data.events || []);
-      if (data.events && data.events.length > 0) {
-        const mapped = data.events.map((e, idx) => ({
+      const events = data.events || [];
+      setRawEvents(events);
+      if (events.length > 0) {
+        const mapped = events.map((e, idx) => ({
           id: e.event_id || `EVT-${idx}`,
           time: e.timestamp ? new Date(e.timestamp).toLocaleTimeString() : 'Recent',
           cloud: (e.cloud_provider || 'AWS').toUpperCase(),
@@ -808,9 +488,11 @@ export function App() {
           ) as 'WARN' | 'CRIT' | 'INFO',
         }));
         setTelemetryLogs(mapped);
+      } else {
+        setTelemetryLogs([]);
       }
     } catch {
-      // Keep existing telemetry if backend call fails
+      // Offline
     }
   };
 
@@ -901,15 +583,15 @@ export function App() {
       showToast('Live Compliance Audit Report (JSON) exported from backend', 'success');
     } catch {
       const reportData = {
-        report_id: `COMP-AUDIT-OFFLINE-${Date.now()}`,
+        report_id: `COMP-AUDIT-${Date.now()}`,
         generated_at: new Date().toISOString(),
-        overall_compliance_score_percent: 66.7,
-        data_source: 'offline_fallback',
+        overall_compliance_score_percent: complianceSummary?.overall_pass_rate ?? 0,
+        data_source: complianceSource,
         total_controls: complianceControls.length,
         passing_controls: complianceControls.filter(c => c.status === 'PASS').length,
         failing_controls: complianceControls.filter(c => c.status === 'FAIL').length,
         partial_controls: complianceControls.filter(c => c.status === 'PARTIAL').length,
-        evaluated_frameworks: ['CIS AWS 1.4', 'CIS Azure 2.0', 'CIS GCP 1.3', 'NIST 800-53', 'ISO 27001', 'PCI-DSS 4.0'],
+        evaluated_frameworks: frameworkCards.map(f => f.name),
         controls: complianceControls
       };
       const blob = new Blob([JSON.stringify(reportData, null, 2)], { type: 'application/json' });
@@ -929,8 +611,9 @@ export function App() {
     const query = promptText || consoleInput;
     if (!query.trim()) return;
 
+    toastSeqRef.current += 1;
     const operatorMsg: SecOpsMessage = {
-      id: Date.now().toString(),
+      id: `${Date.now()}-${toastSeqRef.current}`,
       sender: 'operator',
       text: query,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -945,21 +628,23 @@ export function App() {
       let sysResponse = '';
       let snippet = '';
 
-      if (query.toLowerCase().includes('root') || query.toLowerCase().includes('mfa') || selectedFinding?.id.includes('1049')) {
-        sysResponse = 'Threat Analysis: Root IAM Credentials Detected. Blast radius is unrestricted. TreeSHAP weight +42% risk escalation from iam_root_access_key_active. Execute immediate key revocation:';
-        snippet = 'aws iam delete-access-key --access-key-id AKIAIOSFODNN7EXAMPLE\naws iam create-virtual-mfa-device --virtual-mfa-device-name RootMFADevice';
-      } else if (query.toLowerCase().includes('s3') || query.toLowerCase().includes('bucket') || selectedFinding?.id.includes('2081')) {
-        sysResponse = 'Storage Exposure: Public read ACL allows unauthenticated object download. Violates CIS AWS 2.1.1 and PCI-DSS 3.4. Apply public access block:';
-        snippet = 'resource "aws_s3_account_public_access_block" "block_global" {\n  block_public_acls   = true\n  block_public_policy = true\n  ignore_public_acls  = true\n  restrict_public_buckets = true\n}';
+      if (selectedFinding) {
+        sysResponse = `Remediation Plan for ${selectedFinding.id} [${selectedFinding.severity}]: ${selectedFinding.remediation}`;
+        snippet = selectedFinding.cliCommand || selectedFinding.terraform || '# Non-destructive inspection\naws securityhub get-findings';
+      } else if (findings.length > 0) {
+        const top = findings[0];
+        sysResponse = `Remediation Plan for top finding ${top.id} [${top.severity}]: ${top.remediation}`;
+        snippet = top.cliCommand || top.terraform || '# Non-destructive inspection\naws securityhub get-findings';
       } else {
-        sysResponse = 'Posture Assessment: Evaluated 9 multi-cloud compliance benchmarks. Composite Risk Index: 74.2 / 100. Primary concentration: Unrestricted IAM root and Port 22 Ingress.';
-        snippet = selectedFinding?.cliCommand || 'aws iam get-account-summary';
+        sysResponse = 'No security finding selected or ingested. Select a finding from the Findings tab to inspect its non-destructive remediation playbooks.';
+        snippet = '# No ingested finding available';
       }
 
+      toastSeqRef.current += 1;
       setConsoleMessages(prev => [
         ...prev,
         {
-          id: (Date.now() + 1).toString(),
+          id: `${Date.now()}-${toastSeqRef.current}`,
           sender: 'system',
           text: sysResponse,
           code: snippet,
@@ -968,7 +653,7 @@ export function App() {
         }
       ]);
       setIsConsoleExecuting(false);
-    }, 500);
+    }, 300);
   };
 
   const filteredFindings = useMemo(() => {
@@ -1051,42 +736,13 @@ export function App() {
     }
   };
 
-  const handleSimulatedFileUpload = async (simulateFail = false) => {
-    if (simulateFail) {
-      setUploadStatus('loading');
-      setUploadedFileName('cloud-telemetry-dump-prod-01.json');
-      setUploadErrorMessage('Invalid schema: Missing cloud_provider ARN attributes in rows 12-18. Please upload a standard AWS/Azure/GCP inventory export.');
-      setTimeout(() => {
-        setUploadStatus('error');
-      }, 300);
-      return;
-    }
-
+  const handleUploadButtonClick = () => {
     if (fileInputRef.current?.files && fileInputRef.current.files.length > 0) {
-      await handleRealFileUpload(fileInputRef.current.files[0]);
-      return;
+      handleRealFileUpload(fileInputRef.current.files[0]);
+    } else {
+      showToast('Please select a CSV or JSON dataset first.', 'warn');
+      fileInputRef.current?.click();
     }
-
-    setUploadStatus('loading');
-    setUploadedFileName('cloud-telemetry-dump-prod-01.json');
-
-    if (backendHealth.status === 'ok') {
-      try {
-        const result = await apiLoadSampleBenchmark('cloudtrail');
-        setLastIngestionResult(result);
-        setUploadStatus('complete');
-        showToast(`Loaded benchmark (${result.successful_events} events, ${result.risk_summary.findings_count} findings)`, 'success');
-        await Promise.all([loadFindings(), loadCompliance(), loadTelemetry(), loadStats(), fetchGlobalShapAttributions()]);
-        return;
-      } catch {
-        // Fall back to offline complete below
-      }
-    }
-
-    setTimeout(() => {
-      setUploadStatus('complete');
-      showToast('Telemetry Audit Complete: Processed event graph', 'success');
-    }, 300);
   };
 
   const frameworkCards = useMemo(() => {
@@ -1130,14 +786,7 @@ export function App() {
       });
     }
 
-    return [
-      { name: 'CIS AWS 1.4', pass: 1, fail: 2, total: 3, score: '33%', pct: 33 },
-      { name: 'CIS Azure 2.0', pass: 0, fail: 2, total: 2, score: '25%', pct: 25 },
-      { name: 'CIS GCP 1.3', pass: 1, fail: 0, total: 1, score: '100%', pct: 100 },
-      { name: 'NIST 800-53', pass: 0, fail: 2, total: 2, score: '25%', pct: 25 },
-      { name: 'ISO 27001', pass: 0, fail: 1, total: 1, score: '0%', pct: 0 },
-      { name: 'PCI-DSS 4.0', pass: 1, fail: 0, total: 1, score: '100%', pct: 100 }
-    ];
+    return [];
   }, [complianceSummary, complianceControls]);
 
   const auditedAssetsCount = useMemo(() => {
@@ -1148,6 +797,26 @@ export function App() {
     }
     return 0;
   }, [ingestionStats, findings]);
+
+  const detectedAttckTechniques = useMemo(() => {
+    if (findings.length === 0) return [];
+    const techMap = new Map<string, { id: string; name: string; desc: string; severity: string }>();
+    findings.forEach(f => {
+      const cat = (f.category || '').toUpperCase();
+      if (cat.includes('IAM') && !techMap.has('T1078.004')) {
+        techMap.set('T1078.004', { id: 'T1078.004', name: 'Valid Cloud Accounts', desc: f.title, severity: f.severity });
+      } else if (cat.includes('STORAGE') && !techMap.has('T1537')) {
+        techMap.set('T1537', { id: 'T1537', name: 'Transfer Data to Cloud Account', desc: f.title, severity: f.severity });
+      } else if (cat.includes('NETWORK') && !techMap.has('T1021.004')) {
+        techMap.set('T1021.004', { id: 'T1021.004', name: 'SSH Remote Services', desc: f.title, severity: f.severity });
+      } else if (cat.includes('LOGGING') && !techMap.has('T1562.001')) {
+        techMap.set('T1562.001', { id: 'T1562.001', name: 'Impair Defenses: Disable Cloud Logs', desc: f.title, severity: f.severity });
+      } else if (cat.includes('ENCRYPTION') && !techMap.has('T1486')) {
+        techMap.set('T1486', { id: 'T1486', name: 'Data Encrypted for Impact / Key Tampering', desc: f.title, severity: f.severity });
+      }
+    });
+    return Array.from(techMap.values());
+  }, [findings]);
 
   const avgRiskScore = useMemo(() => {
     if (findings.length === 0) return 0;
@@ -1269,7 +938,7 @@ export function App() {
           <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
             <span className="hud-item">
               <span className="hud-pulse-dot" />
-              <span style={{ color: 'var(--accent)', fontWeight: 700 }}>LIVE POSTURE</span>
+              <span style={{ color: 'var(--accent)', fontWeight: 700 }}>ASSESSED POSTURE</span>
             </span>
             <span className="hud-item" style={{ color: 'var(--text-primary)' }}>
               UTC {utcTime}
@@ -1460,10 +1129,10 @@ export function App() {
               </button>
               <button
                 className="btn btn-secondary"
-                onClick={() => handleExecutePlaybook('Generate emergency IAM root remediation')}
+                onClick={() => handleExecutePlaybook('Inspect remediation playbooks for active findings')}
               >
                 <Terminal size={15} />
-                <span>Generate Remediation Patch</span>
+                <span>Inspect Remediation Playbook</span>
               </button>
             </div>
           </section>
@@ -1625,91 +1294,107 @@ export function App() {
                 <span className="caption">3 Active Cloud Environments</span>
               </div>
               <div className="grid-metrics">
+                {/* AWS Card */}
                 <div className="surface-card" style={{ borderLeft: '3px solid #FF9900' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontWeight: 700 }}>AWS Production</span>
-                    <span className="tag tag-critical">High Exposure</span>
+                    <span style={{ fontWeight: 700 }}>AWS Infrastructure</span>
+                    <span className={`tag ${findings.filter(f => f.cloud === 'AWS' && f.severity === 'CRITICAL').length > 0 ? 'tag-critical' : findings.filter(f => f.cloud === 'AWS').length > 0 ? 'tag-warning' : 'tag'}`}>
+                      {findings.filter(f => f.cloud === 'AWS').length} Findings
+                    </span>
                   </div>
                   <div style={{ marginTop: '12px', display: 'flex', justifyContent: 'space-between' }}>
-                    <span className="caption">Monitored Nodes:</span>
-                    <span className="code-text"><b>142</b> / 232</span>
+                    <span className="caption">Ingested Events:</span>
+                    <span className="code-text"><b>{rawEvents.filter(e => (e.cloud_provider || '').toLowerCase() === 'aws').length}</b> events</span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
                     <span className="caption">Critical Alerts:</span>
-                    <span className="code-text" style={{ color: 'var(--status-critical)' }}><b>2 Active</b></span>
+                    <span className="code-text" style={{ color: findings.filter(f => f.cloud === 'AWS' && f.severity === 'CRITICAL').length > 0 ? 'var(--status-critical)' : 'var(--text-secondary)' }}>
+                      <b>{findings.filter(f => f.cloud === 'AWS' && f.severity === 'CRITICAL').length} Active</b>
+                    </span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
                     <span className="caption">CIS AWS 1.4:</span>
-                    <span className="code-text"><b>88%</b> Pass</span>
+                    <span className="code-text"><b>{frameworkCards.find(c => c.name.includes('AWS'))?.score || 'No data'}</b></span>
                   </div>
                   <div style={{ width: '100%', height: '4px', backgroundColor: 'var(--bg-primary)', borderRadius: '2px', marginTop: '8px', overflow: 'hidden' }}>
-                    <div style={{ width: '88%', height: '100%', backgroundColor: '#FF9900' }} />
+                    <div style={{ width: `${frameworkCards.find(c => c.name.includes('AWS'))?.pct || 0}%`, height: '100%', backgroundColor: '#FF9900' }} />
                   </div>
                 </div>
 
+                {/* Azure Card */}
                 <div className="surface-card" style={{ borderLeft: '3px solid #008AD7' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontWeight: 700 }}>Azure Enterprise</span>
-                    <span className="tag tag-warning">Elevated</span>
+                    <span style={{ fontWeight: 700 }}>Azure Infrastructure</span>
+                    <span className={`tag ${findings.filter(f => f.cloud === 'Azure' && f.severity === 'CRITICAL').length > 0 ? 'tag-critical' : findings.filter(f => f.cloud === 'Azure').length > 0 ? 'tag-warning' : 'tag'}`}>
+                      {findings.filter(f => f.cloud === 'Azure').length} Findings
+                    </span>
                   </div>
                   <div style={{ marginTop: '12px', display: 'flex', justifyContent: 'space-between' }}>
-                    <span className="caption">Monitored Nodes:</span>
-                    <span className="code-text"><b>58</b> / 232</span>
+                    <span className="caption">Ingested Events:</span>
+                    <span className="code-text"><b>{rawEvents.filter(e => (e.cloud_provider || '').toLowerCase() === 'azure').length}</b> events</span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
                     <span className="caption">Critical Alerts:</span>
-                    <span className="code-text" style={{ color: 'var(--status-critical)' }}><b>1 Active</b></span>
+                    <span className="code-text" style={{ color: findings.filter(f => f.cloud === 'Azure' && f.severity === 'CRITICAL').length > 0 ? 'var(--status-critical)' : 'var(--text-secondary)' }}>
+                      <b>{findings.filter(f => f.cloud === 'Azure' && f.severity === 'CRITICAL').length} Active</b>
+                    </span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
                     <span className="caption">CIS Azure 2.0:</span>
-                    <span className="code-text"><b>91%</b> Pass</span>
+                    <span className="code-text"><b>{frameworkCards.find(c => c.name.includes('Azure'))?.score || 'No data'}</b></span>
                   </div>
                   <div style={{ width: '100%', height: '4px', backgroundColor: 'var(--bg-primary)', borderRadius: '2px', marginTop: '8px', overflow: 'hidden' }}>
-                    <div style={{ width: '91%', height: '100%', backgroundColor: '#008AD7' }} />
+                    <div style={{ width: `${frameworkCards.find(c => c.name.includes('Azure'))?.pct || 0}%`, height: '100%', backgroundColor: '#008AD7' }} />
                   </div>
                 </div>
 
+                {/* GCP Card */}
                 <div className="surface-card" style={{ borderLeft: '3px solid #4285F4' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span style={{ fontWeight: 700 }}>GCP Workloads</span>
-                    <span className="tag tag-pass">Nominal</span>
+                    <span className={`tag ${findings.filter(f => f.cloud === 'GCP' && f.severity === 'CRITICAL').length > 0 ? 'tag-critical' : findings.filter(f => f.cloud === 'GCP').length > 0 ? 'tag-warning' : 'tag'}`}>
+                      {findings.filter(f => f.cloud === 'GCP').length} Findings
+                    </span>
                   </div>
                   <div style={{ marginTop: '12px', display: 'flex', justifyContent: 'space-between' }}>
-                    <span className="caption">Monitored Nodes:</span>
-                    <span className="code-text"><b>32</b> / 232</span>
+                    <span className="caption">Ingested Events:</span>
+                    <span className="code-text"><b>{rawEvents.filter(e => (e.cloud_provider || '').toLowerCase() === 'gcp').length}</b> events</span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
                     <span className="caption">Critical Alerts:</span>
-                    <span className="code-text" style={{ color: 'var(--status-pass)' }}><b>0 Active</b></span>
+                    <span className="code-text" style={{ color: findings.filter(f => f.cloud === 'GCP' && f.severity === 'CRITICAL').length > 0 ? 'var(--status-critical)' : 'var(--text-secondary)' }}>
+                      <b>{findings.filter(f => f.cloud === 'GCP' && f.severity === 'CRITICAL').length} Active</b>
+                    </span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
                     <span className="caption">CIS GCP 1.3:</span>
-                    <span className="code-text"><b>94%</b> Pass</span>
+                    <span className="code-text"><b>{frameworkCards.find(c => c.name.includes('GCP'))?.score || 'No data'}</b></span>
                   </div>
                   <div style={{ width: '100%', height: '4px', backgroundColor: 'var(--bg-primary)', borderRadius: '2px', marginTop: '8px', overflow: 'hidden' }}>
-                    <div style={{ width: '94%', height: '100%', backgroundColor: 'var(--accent)' }} />
+                    <div style={{ width: `${frameworkCards.find(c => c.name.includes('GCP'))?.pct || 0}%`, height: '100%', backgroundColor: 'var(--accent)' }} />
                   </div>
                 </div>
 
+                {/* Zero-Trust Engine Card */}
                 <div className="surface-card" style={{ borderLeft: '3px solid var(--accent)' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span style={{ fontWeight: 700 }}>Zero-Trust Engine</span>
-                    <span className="tag tag-accent">Automated</span>
+                    <span className="tag tag-accent">{findings.length > 0 ? 'Active' : 'Standby'}</span>
                   </div>
                   <div style={{ marginTop: '12px', display: 'flex', justifyContent: 'space-between' }}>
-                    <span className="caption">Playbooks Ready:</span>
-                    <span className="code-text"><b>18 IaC</b> Modules</span>
+                    <span className="caption">Available Playbooks:</span>
+                    <span className="code-text"><b>{findings.length}</b> Remediations</span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
-                    <span className="caption">Mean Time to Patch:</span>
-                    <span className="code-text"><b>&lt; 45s</b> CLI/TF</span>
+                    <span className="caption">Execution Mode:</span>
+                    <span className="code-text"><b>Read-Only</b> Safe</span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
                     <span className="caption">Explainability:</span>
-                    <span className="code-text"><b>TreeSHAP</b> Active</span>
+                    <span className="code-text"><b>TreeSHAP</b> {rawEvents.length > 0 ? 'Ready' : 'Pending Ingestion'}</span>
                   </div>
                   <div style={{ width: '100%', height: '4px', backgroundColor: 'var(--bg-primary)', borderRadius: '2px', marginTop: '8px', overflow: 'hidden' }}>
-                    <div style={{ width: '100%', height: '100%', backgroundColor: 'var(--accent)' }} />
+                    <div style={{ width: `${rawEvents.length > 0 ? 100 : 0}%`, height: '100%', backgroundColor: 'var(--accent)' }} />
                   </div>
                 </div>
               </div>
@@ -1721,8 +1406,8 @@ export function App() {
               <div className="surface-card" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <h3>Live Audit Telemetry</h3>
-                    <span className="tag">Realtime Feed</span>
+                    <h3>Recent Ingested Telemetry</h3>
+                    <span className="tag">Backend Event Feed (Polled 5s)</span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                     {(['ALL', 'AWS', 'AZURE', 'GCP', 'CRIT'] as const).map(flt => (
@@ -1817,32 +1502,25 @@ export function App() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '8px' }}>
                 <div>
                   <h3>MITRE ATT&CK Framework Cloud Matrix</h3>
-                  <span className="caption">Active attack techniques detected across audited cloud assets</span>
+                  <span className="caption">Active attack techniques mapped from ingested security findings</span>
                 </div>
-                <span className="tag tag-accent">4 Active Techniques</span>
+                <span className="tag tag-accent">{detectedAttckTechniques.length} Detected Techniques</span>
               </div>
-              <div className="grid-metrics">
-                <div style={{ padding: '12px', border: '1px solid var(--border)', borderRadius: '4px', backgroundColor: 'var(--bg-primary)' }}>
-                  <span className="tag tag-critical">T1078.004</span>
-                  <div style={{ fontWeight: 700, fontSize: '13px', marginTop: '6px' }}>Valid Cloud Accounts</div>
-                  <p className="caption" style={{ marginTop: '4px' }}>Unprotected root access key usage without MFA enforcement</p>
+              {detectedAttckTechniques.length === 0 ? (
+                <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-secondary)', border: '1px dashed var(--border)', borderRadius: '4px' }}>
+                  ATT&CK mapping unavailable for current dataset (No detected security findings).
                 </div>
-                <div style={{ padding: '12px', border: '1px solid var(--border)', borderRadius: '4px', backgroundColor: 'var(--bg-primary)' }}>
-                  <span className="tag tag-critical">T1537</span>
-                  <div style={{ fontWeight: 700, fontSize: '13px', marginTop: '6px' }}>Transfer Data to Cloud Account</div>
-                  <p className="caption" style={{ marginTop: '4px' }}>Public read/list ACLs enabled on object storage buckets</p>
+              ) : (
+                <div className="grid-metrics">
+                  {detectedAttckTechniques.map(tech => (
+                    <div key={tech.id} style={{ padding: '12px', border: '1px solid var(--border)', borderRadius: '4px', backgroundColor: 'var(--bg-primary)' }}>
+                      <span className={`tag ${tech.severity === 'CRITICAL' ? 'tag-critical' : 'tag-warning'}`}>{tech.id}</span>
+                      <div style={{ fontWeight: 700, fontSize: '13px', marginTop: '6px' }}>{tech.name}</div>
+                      <p className="caption" style={{ marginTop: '4px' }}>{tech.desc}</p>
+                    </div>
+                  ))}
                 </div>
-                <div style={{ padding: '12px', border: '1px solid var(--border)', borderRadius: '4px', backgroundColor: 'var(--bg-primary)' }}>
-                  <span className="tag tag-warning">T1021.004</span>
-                  <div style={{ fontWeight: 700, fontSize: '13px', marginTop: '6px' }}>SSH Remote Services</div>
-                  <p className="caption" style={{ marginTop: '4px' }}>Port 22 ingress rule unrestricted to public CIDR 0.0.0.0/0</p>
-                </div>
-                <div style={{ padding: '12px', border: '1px solid var(--border)', borderRadius: '4px', backgroundColor: 'var(--bg-primary)' }}>
-                  <span className="tag tag-critical">T1562.001</span>
-                  <div style={{ fontWeight: 700, fontSize: '13px', marginTop: '6px' }}>Impair Defenses: Disable Cloud Logs</div>
-                  <p className="caption" style={{ marginTop: '4px' }}>Multi-region CloudTrail audit logging stopped or tampered with</p>
-                </div>
-              </div>
+              )}
             </div>
 
             {/* Quick Remediation Priority Queue */}
@@ -1882,7 +1560,7 @@ export function App() {
                         <span className="tag">{f.cloud}</span>
                         <span className="caption code-text">{f.id}</span>
                         <span className="kpi-trend-chip" style={{ color: 'var(--status-critical)' }}>
-                          SLA: 2h remaining
+                          {f.severity === 'CRITICAL' ? 'SLA: Immediate Priority' : 'SLA: Standard Priority'}
                         </span>
                       </div>
                       <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{f.title}</div>
@@ -2132,10 +1810,7 @@ export function App() {
                               key={st}
                               className={`btn ${findingStatuses[selectedFinding.id] === st ? 'btn-primary' : 'btn-secondary'}`}
                               style={{ height: '26px', minHeight: '26px', padding: '0 8px', fontSize: '11px' }}
-                              onClick={() => {
-                                setFindingStatuses(prev => ({ ...prev, [selectedFinding.id]: st }));
-                                showToast(`${selectedFinding.id} status updated to ${st.replace('_', ' ')}`);
-                              }}
+                              onClick={() => handleFindingStatusUpdate(selectedFinding.id, st)}
                             >
                               {st.replace('_', ' ')}
                             </button>
@@ -2228,6 +1903,11 @@ export function App() {
                         <div style={{ padding: '24px', textAlign: 'center' }}>
                           <RefreshCw size={20} className="animate-spin" style={{ color: '#38bdf8', margin: '0 auto 8px auto' }} />
                           <div className="caption">Compiling verified telemetry, SHAP attributions, and compliance impact...</div>
+                        </div>
+                      ) : explanationError ? (
+                        <div style={{ padding: '16px', border: '1px solid rgba(245, 158, 11, 0.3)', borderRadius: '4px', backgroundColor: 'rgba(245, 158, 11, 0.05)', color: 'var(--text-secondary)', fontSize: '13px' }}>
+                          <div style={{ fontWeight: 600, color: 'var(--status-warning)', marginBottom: '4px' }}>Explanation Unavailable</div>
+                          <div>{explanationError}</div>
                         </div>
                       ) : selectedFindingExplanation ? (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
@@ -2324,19 +2004,7 @@ export function App() {
                         className="btn btn-secondary"
                         onClick={() => {
                           setActiveTab('ml-engine');
-                          explainEventWithShap({
-                            event_id: selectedFinding.id,
-                            timestamp: new Date().toISOString(),
-                            cloud_provider: selectedFinding.cloud.toLowerCase(),
-                            resource_type: selectedFinding.category,
-                            action: 'AssessSecurityRisk',
-                            actor_type: 'root',
-                            actor_name: 'root',
-                            source_ip: '198.51.100.24',
-                            mfa_used: false,
-                            outcome: 'Failure',
-                            session_duration_s: 0
-                          });
+                          explainEventWithShap();
                         }}
                         style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '6px', alignSelf: 'flex-start', fontSize: '12px', padding: '5px 10px' }}
                       >
@@ -2515,6 +2183,20 @@ export function App() {
             </div>
 
             {/* Control Table */}
+            {complianceControls.length === 0 ? (
+              <div className="state-empty" style={{ margin: '16px 0' }}>
+                <div className="state-empty-title">No Evaluated Compliance Data</div>
+                <p>No compliance policy evaluations have been executed yet. Ingest telemetry or load a benchmark dataset to evaluate multi-cloud controls.</p>
+                <button
+                  className="btn btn-primary"
+                  style={{ marginTop: '16px' }}
+                  onClick={() => setActiveTab('ingestion')}
+                >
+                  <UploadCloud size={15} />
+                  <span>Go to Ingestion Engine</span>
+                </button>
+              </div>
+            ) : (
             <div className="surface-card" style={{ overflowX: 'auto', padding: 0 }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '600px' }}>
                 <thead>
@@ -2551,6 +2233,7 @@ export function App() {
                 </tbody>
               </table>
             </div>
+            )}
           </div>
         )}
 
@@ -2576,7 +2259,7 @@ export function App() {
                 <button
                   className="btn btn-secondary"
                   onClick={runLiveMlInference}
-                  disabled={isInferring}
+                  disabled={isInferring || rawEvents.length === 0}
                   style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
                 >
                   <Activity size={15} />
@@ -2600,13 +2283,13 @@ export function App() {
                 <div style={{ padding: '12px', border: '1px solid var(--border)', borderRadius: '4px' }}>
                   <span className="caption">Training Dataset</span>
                   <div className="code-text" style={{ fontSize: '14px', fontWeight: 700, marginTop: '4px' }}>
-                    {modelInfo?.training_records_count ? `${modelInfo.training_records_count.toLocaleString()} events` : '25,000 events'}
+                    {modelInfo?.training_records_count ? `${modelInfo.training_records_count.toLocaleString()} events` : 'Unavailable'}
                   </div>
                 </div>
                 <div style={{ padding: '12px', border: '1px solid var(--border)', borderRadius: '4px' }}>
                   <span className="caption">Engineered Features</span>
                   <div className="code-text" style={{ fontSize: '14px', fontWeight: 700, marginTop: '4px' }}>
-                    {modelInfo?.feature_count || 75} dimensions
+                    {modelInfo?.feature_count ? `${modelInfo.feature_count} dimensions` : 'Unavailable'}
                   </div>
                 </div>
               </div>
@@ -2660,7 +2343,7 @@ export function App() {
                 <button
                   className="btn btn-secondary"
                   onClick={runLiveSupervisedScan}
-                  disabled={isSupervisedInferring}
+                  disabled={isSupervisedInferring || rawEvents.length === 0}
                   style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
                 >
                   <Activity size={15} />
@@ -2684,13 +2367,13 @@ export function App() {
                 <div style={{ padding: '12px', border: '1px solid var(--border)', borderRadius: '4px' }}>
                   <span className="caption">Dataset & Split</span>
                   <div className="code-text" style={{ fontSize: '13px', fontWeight: 700, marginTop: '4px' }}>
-                    {supervisedModelInfo?.training_records_count ? `${supervisedModelInfo.training_records_count.toLocaleString()} events` : '20,000 / 5,000'}
+                    {supervisedModelInfo?.training_records_count ? `${supervisedModelInfo.training_records_count.toLocaleString()} events` : 'Unavailable'}
                   </div>
                 </div>
                 <div style={{ padding: '12px', border: '1px solid var(--border)', borderRadius: '4px' }}>
                   <span className="caption">Evaluation Metrics</span>
                   <div className="code-text" style={{ fontSize: '13px', fontWeight: 700, marginTop: '4px' }}>
-                    MAE: {supervisedModelInfo?.metrics?.mae ? `${supervisedModelInfo.metrics.mae} pts` : '10.59 pts'} | R²: {supervisedModelInfo?.metrics?.r2 || '0.48'}
+                    {supervisedModelInfo?.metrics?.mae ? `MAE: ${supervisedModelInfo.metrics.mae} pts | R²: ${supervisedModelInfo?.metrics?.r2 ?? 'N/A'}` : 'Unavailable'}
                   </div>
                 </div>
               </div>
@@ -2848,7 +2531,7 @@ export function App() {
                 <div style={{ textAlign: 'right' }}>
                   <span className="caption">Baseline Risk:</span>
                   <div className="code-text" style={{ fontSize: '15px', fontWeight: 700 }}>
-                    {globalShapAttributions?.base_value || 48.5} pts
+                    {globalShapAttributions?.base_value !== undefined ? `${globalShapAttributions.base_value} pts` : 'Unavailable'}
                   </div>
                 </div>
               </div>
@@ -2865,15 +2548,9 @@ export function App() {
                 </div>
               )}
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                {(globalShapAttributions?.top_global_features || [
-                  { feature_name: 'actor_type_root', display_name: 'Root Cloud Account Usage', domain: 'IAM', relative_percentage: 34.5, description: 'Privileged root account usage' },
-                  { feature_name: 'mfa_used', display_name: 'Missing Multi-Factor Auth', domain: 'Authentication', relative_percentage: 25.3, description: 'Missing MFA verification' },
-                  { feature_name: 'is_public_ip', display_name: 'Public Internet Ingress', domain: 'Network', relative_percentage: 18.0, description: 'Untrusted public IP' },
-                  { feature_name: 'action_StopLogging', display_name: 'Audit Trail Interruption', domain: 'Logging', relative_percentage: 12.1, description: 'Logging deactivated' },
-                  { feature_name: 'action_PutBucketAcl', display_name: 'Storage ACL Modification', domain: 'Storage', relative_percentage: 6.0, description: 'Public storage ACL' },
-                  { feature_name: 'action_ScheduleKeyDeletion', display_name: 'KMS Key Destruction', domain: 'Encryption', relative_percentage: 4.1, description: 'Key deletion' }
-                ]).map(item => (
+              {globalShapAttributions?.top_global_features && globalShapAttributions.top_global_features.length > 0 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                  {globalShapAttributions.top_global_features.map(item => (
                   <div key={item.feature_name} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -2903,6 +2580,11 @@ export function App() {
                   </div>
                 ))}
               </div>
+              ) : (
+                <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                  Global TreeSHAP feature attributions unavailable. Ingest telemetry to compute attributions across cloud resources.
+                </div>
+              )}
             </div>
 
             {/* TreeSHAP Local Instance Attribution Explainer */}
@@ -2920,7 +2602,7 @@ export function App() {
                 <button
                   className="btn btn-secondary"
                   onClick={() => explainEventWithShap()}
-                  disabled={isExplainingEvent}
+                  disabled={isExplainingEvent || rawEvents.length === 0}
                   style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
                 >
                   <Activity size={15} />
@@ -2934,7 +2616,7 @@ export function App() {
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', paddingBottom: '12px', borderBottom: '1px solid var(--border)' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                       <span className="code-text" style={{ fontWeight: 700 }}>
-                        Incident: {selectedEventExplanation.event_id || 'evt-fnd-root-01'}
+                        Incident: {selectedEventExplanation.event_id || 'N/A'}
                       </span>
                       <span className="caption">
                         Base Risk: <b>{selectedEventExplanation.base_value} pts</b>
@@ -3065,20 +2747,14 @@ export function App() {
 
                 <button
                   className={`btn btn-primary ${uploadStatus === 'loading' ? 'is-loading' : ''}`}
-                  onClick={() => handleSimulatedFileUpload(false)}
+                  onClick={handleUploadButtonClick}
                   disabled={uploadStatus === 'loading'}
                 >
                   {uploadStatus === 'loading' && <span className="spinner" style={{ marginRight: '6px' }} />}
                   <span>{uploadStatus === 'loading' ? 'Processing Telemetry...' : 'Upload & Analyze File'}</span>
                 </button>
 
-                <button
-                  className="btn btn-secondary"
-                  onClick={() => handleSimulatedFileUpload(true)}
-                  disabled={uploadStatus === 'loading'}
-                >
-                  Simulate Ingestion Error
-                </button>
+
 
                 {uploadStatus !== 'idle' && (
                   <button
@@ -3106,7 +2782,7 @@ export function App() {
                     onClick={() => handleLoadSampleBenchmark('cloudtrail')}
                     disabled={uploadStatus === 'loading'}
                   >
-                    AWS CloudTrail (JSON)
+                    Demo / Benchmark: AWS CloudTrail (JSON)
                   </button>
                   <button
                     className="btn btn-secondary"
@@ -3114,7 +2790,7 @@ export function App() {
                     onClick={() => handleLoadSampleBenchmark('azure')}
                     disabled={uploadStatus === 'loading'}
                   >
-                    Azure Activity (JSON)
+                    Demo / Benchmark: Azure Activity (JSON)
                   </button>
                   <button
                     className="btn btn-secondary"
@@ -3122,7 +2798,7 @@ export function App() {
                     onClick={() => handleLoadSampleBenchmark('gcp')}
                     disabled={uploadStatus === 'loading'}
                   >
-                    GCP Audit (JSON)
+                    Demo / Benchmark: GCP Audit (JSON)
                   </button>
                   <button
                     className="btn btn-secondary"
@@ -3130,7 +2806,7 @@ export function App() {
                     onClick={() => handleLoadSampleBenchmark('attack_scenario')}
                     disabled={uploadStatus === 'loading'}
                   >
-                    Multi-Stage Attack (JSON)
+                    Demo / Benchmark: Multi-Stage Attack (JSON)
                   </button>
                   <button
                     className="btn btn-secondary"
@@ -3138,7 +2814,7 @@ export function App() {
                     onClick={() => handleLoadSampleBenchmark('synthetic')}
                     disabled={uploadStatus === 'loading'}
                   >
-                    Cloud Security Events (CSV)
+                    Demo / Benchmark: Security Events (CSV)
                   </button>
                 </div>
               </div>
@@ -3163,7 +2839,7 @@ export function App() {
                     {lastIngestionResult ? (
                       ` — Processed ${lastIngestionResult.successful_events} events in ${lastIngestionResult.duration_ms}ms with ${lastIngestionResult.risk_summary.anomalies_detected} anomalies and ${lastIngestionResult.risk_summary.findings_count} findings.`
                     ) : (
-                      ` — Audited 84 resources, identified 2 new critical exposures.`
+                      ` — Ingestion pipeline normalized events and synchronized compliance state.`
                     )}
                   </div>
 

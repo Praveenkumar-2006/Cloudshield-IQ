@@ -205,3 +205,140 @@ class TestIngestionAPIEndpoints:
         comp_data = comp_resp.json()
         assert "overall_pass_rate" in comp_data
         assert "framework_scores" in comp_data
+
+    def test_upload_cloudtrail_json_endpoint(self, client):
+        payload = json.dumps({
+            "Records": [
+                {
+                    "eventID": "ct-upload-01",
+                    "eventTime": "2026-09-01T12:00:00Z",
+                    "eventName": "ConsoleLogin",
+                    "userIdentity": {"type": "Root", "userName": "root"},
+                    "responseElements": {"ConsoleLogin": "Success"},
+                }
+            ]
+        })
+        resp = client.post(
+            "/api/v1/ingestion/upload",
+            files={"file": ("cloudtrail.json", payload, "application/json")},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["successful_events"] == 1
+        assert data["risk_summary"]["findings_count"] >= 1
+
+    def test_upload_azure_json_endpoint(self, client):
+        payload = json.dumps([
+            {
+                "correlationId": "az-upload-01",
+                "eventTimestamp": "2026-09-01T12:00:00Z",
+                "operationName": "Microsoft.Storage/storageAccounts/write",
+                "caller": "dev@azure.com",
+                "resourceId": "/subscriptions/s1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/store1",
+                "status": "Succeeded",
+            }
+        ])
+        resp = client.post(
+            "/api/v1/ingestion/upload",
+            files={"file": ("azure_logs.json", payload, "application/json")},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["successful_events"] == 1
+
+    def test_upload_gcp_json_endpoint(self, client):
+        payload = json.dumps([
+            {
+                "insertId": "gcp-upload-01",
+                "timestamp": "2026-09-01T12:00:00Z",
+                "protoPayload": {
+                    "methodName": "storage.buckets.create",
+                    "authenticationInfo": {"principalEmail": "admin@gcp.com"},
+                    "resourceName": "projects/p1/buckets/b1",
+                },
+            }
+        ])
+        resp = client.post(
+            "/api/v1/ingestion/upload",
+            files={"file": ("gcp_logs.json", payload, "application/json")},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["successful_events"] == 1
+
+    def test_upload_malformed_json_endpoint(self, client):
+        resp = client.post(
+            "/api/v1/ingestion/upload",
+            files={"file": ("bad.json", b"{broken json", "application/json")},
+        )
+        assert resp.status_code == 400
+        assert "Failed to parse" in resp.json()["detail"]
+
+    def test_upload_large_file_rejection(self, client, monkeypatch):
+        from app.core.config import get_settings
+        monkeypatch.setattr(get_settings(), "MAX_UPLOAD_SIZE_MB", 0.0001)  # ~100 bytes
+        resp = client.post(
+            "/api/v1/ingestion/upload",
+            files={"file": ("large.json", b"x" * 1000, "application/json")},
+        )
+        assert resp.status_code == 413
+
+    def test_treeshap_with_uploaded_event(self, client):
+        # Ingest an event
+        payload = json.dumps([
+            {
+                "event_id": "evt-shap-real-01",
+                "timestamp": "2026-09-01T12:00:00Z",
+                "cloud_provider": "aws",
+                "resource_type": "AWS::IAM::Root",
+                "action": "ConsoleLogin",
+                "actor_type": "root",
+                "actor_name": "root",
+                "mfa_used": False,
+                "outcome": "Success",
+            }
+        ])
+        client.post(
+            "/api/v1/ingestion/upload",
+            files={"file": ("treeshap_test.json", payload, "application/json")},
+        )
+
+        # Get the actual event
+        events_resp = client.get("/api/v1/ingestion/events?limit=5")
+        events = events_resp.json()["events"]
+        assert len(events) >= 1
+        target_event = events[0]
+
+        # Call TreeSHAP with real event
+        explain_resp = client.post("/api/v1/ml/explain/event", json=target_event)
+        assert explain_resp.status_code == 200
+        explain_data = explain_resp.json()
+        assert explain_data["event_id"] == target_event["event_id"]
+        assert "predicted_risk_score" in explain_data
+        assert "top_risk_drivers" in explain_data
+
+    def test_finding_status_persistence(self, client):
+        # Ingest event that creates finding
+        csv_content = (
+            "timestamp,cloud_provider,resource_type,action,actor_type,actor_name,mfa_used,outcome\n"
+            "2026-09-01T12:00:00Z,aws,AWS::IAM::Root,ConsoleLogin,root,root,false,Success\n"
+        )
+        client.post(
+            "/api/v1/ingestion/upload",
+            files={"file": ("status_test.csv", csv_content, "text/csv")},
+        )
+        findings_resp = client.get("/api/v1/findings")
+        findings = findings_resp.json()["findings"]
+        assert len(findings) >= 1
+        fid = findings[0]["finding_id"]
+
+        # Update status
+        patch_resp = client.patch(f"/api/v1/findings/{fid}/status", json={"status": "IN_PROGRESS"})
+        assert patch_resp.status_code == 200
+        assert patch_resp.json()["status"] == "IN_PROGRESS"
+
+        # Verify status persists
+        get_resp = client.get(f"/api/v1/findings/{fid}")
+        assert get_resp.status_code == 200
+        assert get_resp.json()["status"] == "IN_PROGRESS"
+

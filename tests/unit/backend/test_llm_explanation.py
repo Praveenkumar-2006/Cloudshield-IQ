@@ -225,3 +225,67 @@ class TestExplanationApiEndpoints:
     def test_post_ml_explain_evidence_invalid_payload(self, client: TestClient):
         response = client.post("/api/v1/ml/explain/evidence", json={"bad": "payload"})
         assert response.status_code == 422
+
+    def test_deterministic_grounding_verifier_rejects_hallucinations(self):
+        from app.services.llm.service import verify_llm_grounding
+        evidence = EvidencePack(
+            finding_id="FND-AWS-1049",
+            title="IAM Root User Key Active",
+            cloud_provider="AWS",
+            resource_id="arn:aws:iam::123456789012:root",
+            severity="CRITICAL",
+            risk_score=96.0,
+            category="IAM",
+            remediation_guidance="Revoke key.",
+            compliance_violations=["CIS AWS 1.1"],
+        )
+
+        # 1. Hallucinated finding_id -> rejected
+        fake_id = SecurityExplanation(
+            finding_id="HALLUCINATED-ID",
+            risk="CRITICAL",
+            what_happened="Root key active on arn:aws:iam::123456789012:root",
+            why_it_matters="High risk",
+            evidence=["CIS AWS 1.1"],
+            compliance_impact="CIS AWS 1.1 violation",
+            recommended_action="Revoke key.",
+            grounding_score=1.0,
+            is_llm_generated=True,
+            generated_at="2026-01-01T00:00:00Z",
+        )
+        is_valid_id, _ = verify_llm_grounding(fake_id, evidence)
+        assert is_valid_id is False
+
+        # 2. Hallucinated new ARN/resource -> rejected
+        fake_arn = SecurityExplanation(
+            finding_id="FND-AWS-1049",
+            risk="CRITICAL",
+            what_happened="Tampered bucket arn:aws:s3:::stolen-database-dump-secret",
+            why_it_matters="High risk",
+            evidence=["CIS AWS 1.1"],
+            compliance_impact="CIS AWS 1.1 violation",
+            recommended_action="Revoke key.",
+            grounding_score=1.0,
+            is_llm_generated=True,
+            generated_at="2026-01-01T00:00:00Z",
+        )
+        is_valid_arn, _ = verify_llm_grounding(fake_arn, evidence)
+        assert is_valid_arn is False
+
+        # 3. Grounded explanation referencing evidence facts -> accepted
+        valid = SecurityExplanation(
+            finding_id="FND-AWS-1049",
+            risk="CRITICAL",
+            what_happened="Root user key is active on arn:aws:iam::123456789012:root",
+            why_it_matters="Unrestricted account takeover risk",
+            evidence=["CIS AWS 1.1"],
+            compliance_impact="Violates CIS AWS 1.1 baseline",
+            recommended_action="Revoke key immediately.",
+            grounding_score=1.0,
+            is_llm_generated=True,
+            generated_at="2026-01-01T00:00:00Z",
+        )
+        is_valid_ok, score = verify_llm_grounding(valid, evidence)
+        assert is_valid_ok is True
+        assert score >= 0.75
+

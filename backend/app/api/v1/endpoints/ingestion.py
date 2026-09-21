@@ -90,10 +90,16 @@ async def upload_telemetry_file(
             detail=f"File exceeds maximum allowed size of {settings.MAX_UPLOAD_SIZE_MB}MB.",
         )
 
-    if ext == ".csv":
-        result = pipeline.parse_csv_bytes(content, filename=filename)
-    else:
-        result = pipeline.parse_json_bytes(content, filename=filename)
+    try:
+        if ext == ".csv":
+            result = pipeline.parse_csv_bytes(content, filename=filename)
+        else:
+            result = pipeline.parse_json_bytes(content, filename=filename)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to parse uploaded dataset: {str(exc)}",
+        )
 
     logger.info(
         "File ingested successfully",
@@ -105,7 +111,7 @@ async def upload_telemetry_file(
         recent_events = store.events[-result.successful_events:] if store.events else []
         f_count = result.risk_summary.get("findings_count", 0)
         recent_findings = store.findings[-f_count:] if f_count > 0 and store.findings else []
-        background_tasks.add_task(_persist_ingestion_safely, recent_events, recent_findings)
+        await _persist_ingestion_safely(recent_events, recent_findings)
     return result
 
 
@@ -130,7 +136,7 @@ async def ingest_event_batch(
         recent_events = store.events[-result.successful_events:] if store.events else []
         f_count = result.risk_summary.get("findings_count", 0)
         recent_findings = store.findings[-f_count:] if f_count > 0 and store.findings else []
-        background_tasks.add_task(_persist_ingestion_safely, recent_events, recent_findings)
+        await _persist_ingestion_safely(recent_events, recent_findings)
     return result
 
 
@@ -203,7 +209,7 @@ async def load_sample_dataset(
         recent_events = store.events[-result.successful_events:] if store.events else []
         f_count = result.risk_summary.get("findings_count", 0)
         recent_findings = store.findings[-f_count:] if f_count > 0 and store.findings else []
-        background_tasks.add_task(_persist_ingestion_safely, recent_events, recent_findings)
+        await _persist_ingestion_safely(recent_events, recent_findings)
 
     return result
 

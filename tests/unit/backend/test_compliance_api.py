@@ -101,3 +101,39 @@ class TestComplianceApi:
         assert "summary" in report
         assert "control_evaluations" in report
         assert isinstance(report["control_evaluations"], list)
+
+    def test_get_compliance_evaluations(self):
+        resp = client.get("/api/v1/compliance/evaluations")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "total_controls" in data
+        assert "results" in data
+        assert "summary" in data
+        assert len(data["results"]) == data["total_controls"]
+        for ctrl in data["results"]:
+            assert "control_id" in ctrl
+            assert "status" in ctrl
+            assert ctrl["status"] in ["PASS", "FAIL", "PARTIAL"]
+            assert "evaluated_resources" in ctrl
+            assert "failed_resources" in ctrl
+
+    def test_compliance_consistency_between_endpoints(self):
+        summary_resp = client.get("/api/v1/compliance/summary")
+        assert summary_resp.status_code == 200
+        summary = summary_resp.json()
+
+        eval_resp = client.get("/api/v1/compliance/evaluations")
+        assert eval_resp.status_code == 200
+        eval_data = eval_resp.json()
+
+        report_resp = client.get("/api/v1/compliance/report")
+        assert report_resp.status_code == 200
+        report_data = report_resp.json()
+
+        # Check total controls agreement
+        assert summary["total_controls"] == eval_data["total_controls"]
+        assert eval_data["total_controls"] == report_data["summary"]["total_controls_evaluated"]
+        # Check overall pass rate agreement
+        assert summary["overall_pass_rate"] == eval_data["summary"]["overall_pass_rate"]
+        assert eval_data["summary"]["overall_pass_rate"] == report_data["summary"]["overall_pass_rate_percent"]
+

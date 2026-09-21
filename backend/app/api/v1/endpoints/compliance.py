@@ -5,6 +5,7 @@ REST endpoints for deterministic compliance benchmark assessment, regulatory
 framework inquiries, and compliance audit reporting.
 """
 
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -92,6 +93,35 @@ async def list_controls(
     ]
 
 
+@router.get(
+    "/evaluations",
+    summary="Get Evaluated Compliance Status Against Current Telemetry",
+    response_model=ComplianceEvaluationResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def get_compliance_evaluations(
+    framework: Optional[ComplianceFramework] = Query(None, description="Filter evaluations by framework"),
+    cloud_provider: Optional[CloudProvider] = Query(None, description="Filter evaluations by cloud provider"),
+) -> ComplianceEvaluationResponse:
+    """
+    Retrieve deterministic compliance evaluation results computed against currently ingested telemetry.
+    If no telemetry has been ingested yet, returns an empty evaluation list and zero pass rate.
+    """
+    store = get_ingestion_store()
+    engine = get_compliance_engine()
+    results = engine.evaluate(
+        events=store.events,
+        framework=framework,
+        cloud_provider=cloud_provider,
+    )
+    summary = engine.calculate_summary(results)
+    return ComplianceEvaluationResponse(
+        total_controls=len(results),
+        results=results,
+        summary=summary,
+    )
+
+
 @router.post(
     "/evaluate",
     summary="Evaluate Compliance Against Security Events",
@@ -106,6 +136,21 @@ async def evaluate_compliance(
     """
     Execute deterministic compliance evaluation on a batch of normalized security events.
     """
+    if not events:
+        return ComplianceEvaluationResponse(
+            total_controls=0,
+            results=[],
+            summary=ComplianceSummary(
+                overall_pass_rate=0.0,
+                total_controls=0,
+                passed_controls=0,
+                failed_controls=0,
+                partial_controls=0,
+                framework_scores={},
+                evaluated_at=datetime.now(timezone.utc),
+            ),
+        )
+
     engine = get_compliance_engine()
 
     # Convert event create objects to full CloudSecurityEvents
@@ -148,9 +193,10 @@ async def get_compliance_summary(
 ) -> ComplianceSummary:
     """
     Compute and retrieve the current compliance posture score across all registered frameworks.
+    If no telemetry has been ingested, returns 0.0% with zero controls.
     """
-    engine = get_compliance_engine()
     store = get_ingestion_store()
+    engine = get_compliance_engine()
     results = engine.evaluate(events=store.events, framework=framework)
     return engine.calculate_summary(results)
 
@@ -167,7 +213,8 @@ async def generate_audit_report(
     """
     Generate an enterprise compliance audit report containing full control breakdowns.
     """
-    engine = get_compliance_engine()
     store = get_ingestion_store()
+    engine = get_compliance_engine()
     results = engine.evaluate(events=store.events, framework=framework)
     return engine.export_audit_report(results)
+
